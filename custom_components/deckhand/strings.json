@@ -1,0 +1,77 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Deckhand Smart Dial",
+        "description": "Enter your team ID to discover Deckhand dials via MQTT. You can find this in your Helm settings. Use '1' for local/Console setups.",
+        "data": {
+          "team_id": "Team ID"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Deckhand is already configured for this team.",
+      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Deckhand options",
+        "description": "Manage which media_player entities auto-push now-playing updates to your dials.",
+        "menu_options": {
+          "add": "Add a media_player binding",
+          "remove": "Remove a binding",
+          "done": "Save and close"
+        }
+      },
+      "add": {
+        "title": "Add media_player binding",
+        "description": "Pick a Deckhand dial and the media_player entity it should mirror. When the player state changes, the dial's now-playing face updates automatically. Currently configured: {count}.",
+        "data": {
+          "dial_device_id": "Dial",
+          "entity_id": "Media player"
+        }
+      },
+      "remove": {
+        "title": "Remove bindings",
+        "description": "Pick one or more bindings to delete:\n{bindings}",
+        "data": {
+          "remove": "Bindings to remove"
+        }
+      }
+    },
+    "error": {
+      "missing_fields": "Both a dial and a media_player entity are required.",
+      "not_media_player": "The selected entity must be a media_player.",
+      "unknown_dial": "The selected device is not a Deckhand dial on this integration."
+    }
+  },
+  "exceptions": {
+    "unknown_device": {
+      "message": "The selected device is not a known Deckhand dial."
+    },
+    "invalid_theme": {
+      "message": "A non-empty theme id is required."
+    },
+    "empty_message": {
+      "message": "Announcement message cannot be empty."
+    }
+  },
+  "services": {
+    "update_from_media_player": {
+      "name": "Update from media player",
+      "description": "Read a media_player's current state and push it to a dial as a now-playing update.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The Deckhand dial device to target."
+        },
+        "entity_id": {
+          "name": "Media player",
+          "description": "The media_player entity to mirror."
+        }
+      }
+    }
+  }
+}

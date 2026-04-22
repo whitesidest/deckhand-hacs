@@ -1,0 +1,428 @@
+push_theme:
+  name: Push Theme
+  description: Push a theme to one or more Deckhand dials.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to push the theme to.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    theme:
+      name: Theme
+      description: Theme slug to push (e.g., "elysian", "cosmos").
+      required: true
+      example: "elysian"
+      selector:
+        text:
+
+send_announcement:
+  name: Send Announcement
+  description: Send an announcement message to a Deckhand dial.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to send the announcement to.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    message:
+      name: Message
+      description: The announcement message to display.
+      required: true
+      example: "Dinner is ready!"
+      selector:
+        text:
+    from_name:
+      name: From
+      description: Who the announcement is from.
+      default: "Home Assistant"
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: How long to display the announcement (seconds).
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 300
+          unit_of_measurement: seconds
+    animation:
+      name: Animation
+      description: Visual effect to play behind the announcement.
+      default: "none"
+      selector:
+        select:
+          options:
+            - "none"
+            - sparkle
+            - flash
+            - fireworks
+            - magic_spell
+            - fire
+            - waves
+            - rain
+            - opening_flower
+            - falling_leaves
+            - confetti
+            - snow
+            - aurora
+            - ripple
+
+send_countdown:
+  name: Send Countdown
+  description: >
+    Schedule a countdown announcement on a Deckhand dial. The dial shows
+    a live counter ticking down to the target moment, then transitions
+    to a celebration message + animation at T=0. Optionally swaps to a
+    celebration theme at the same moment.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to target.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    target_datetime:
+      name: Target Moment
+      description: When the countdown reaches zero (the celebration moment).
+      required: true
+      example: "2026-12-31T23:59:59"
+      selector:
+        datetime:
+    message:
+      name: Countdown Message
+      description: Text shown small below the live counter during the countdown.
+      example: "Almost there..."
+      selector:
+        text:
+    celebration_message:
+      name: Celebration Message
+      description: Text shown when the countdown hits zero.
+      required: true
+      example: "Happy New Year!"
+      selector:
+        text:
+    celebration_animation:
+      name: Celebration Animation
+      description: Visual effect that fires at T=0.
+      default: "fireworks"
+      selector:
+        select:
+          options:
+            - "none"
+            - sparkle
+            - flash
+            - fireworks
+            - magic_spell
+            - fire
+            - waves
+            - rain
+            - opening_flower
+            - falling_leaves
+            - confetti
+            - snow
+            - aurora
+            - ripple
+    celebration_theme:
+      name: Celebration Theme
+      description: >
+        Optional theme slug to push at T=0 (e.g. "royale", "elysian").
+        Leave blank to keep the dial's current theme.
+      example: "royale"
+      selector:
+        text:
+    lead_seconds:
+      name: Lead Time (seconds)
+      description: How long before the target the countdown should start.
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 3600
+          unit_of_measurement: seconds
+    from_name:
+      name: From
+      description: Who the countdown is from.
+      default: "Home Assistant"
+      selector:
+        text:
+
+reboot:
+  name: Reboot
+  description: Reboot a Deckhand dial.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to reboot.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+
+set_timezone:
+  name: Set Timezone
+  description: >
+    Set the per-dial timezone. Accepts an IANA name (e.g.
+    "America/Los_Angeles") which is converted to a POSIX TZ string
+    before being published over MQTT — the firmware passes that string
+    straight to setenv("TZ", ...) so the clock face and any time
+    rendering immediately reflect the new zone. Schedules continue to
+    fire correctly because the wire format is epoch.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to retime.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    timezone:
+      name: IANA Timezone
+      description: IANA name like "America/New_York" or "Europe/Paris".
+      required: true
+      example: "America/New_York"
+      selector:
+        select:
+          options:
+            - "UTC"
+            - "America/Los_Angeles"
+            - "America/Vancouver"
+            - "America/Denver"
+            - "America/Phoenix"
+            - "America/Chicago"
+            - "America/Mexico_City"
+            - "America/New_York"
+            - "America/Toronto"
+            - "America/Anchorage"
+            - "America/Sao_Paulo"
+            - "Pacific/Honolulu"
+            - "Europe/London"
+            - "Europe/Paris"
+            - "Europe/Berlin"
+            - "Europe/Madrid"
+            - "Europe/Rome"
+            - "Europe/Amsterdam"
+            - "Europe/Stockholm"
+            - "Europe/Athens"
+            - "Africa/Cairo"
+            - "Africa/Johannesburg"
+            - "Asia/Dubai"
+            - "Asia/Kolkata"
+            - "Asia/Singapore"
+            - "Asia/Hong_Kong"
+            - "Asia/Shanghai"
+            - "Asia/Seoul"
+            - "Asia/Tokyo"
+            - "Australia/Perth"
+            - "Australia/Brisbane"
+            - "Australia/Sydney"
+            - "Australia/Melbourne"
+            - "Pacific/Auckland"
+
+apply_overlay:
+  name: Apply Overlay
+  description: >
+    Apply a partial theme overlay to a dial without replacing the current
+    theme. Handy for reactive automations — e.g. "flash Lightning subtitle
+    when WeatherFlow detects nearby strikes". Any field left unset keeps
+    the dial's current value.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to target.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    subtitle_mode:
+      name: Subtitle mode
+      description: theme | custom | date | date_year | none
+      example: "custom"
+      selector:
+        select:
+          options:
+            - "theme"
+            - "custom"
+            - "date"
+            - "date_year"
+            - "none"
+    subtitle_text:
+      name: Subtitle text
+      description: Text shown when subtitle_mode is "custom".
+      example: "⚡ Lightning detected"
+      selector:
+        text:
+    home_face:
+      name: Home face
+      description: theme | clock | message | sensor | image | blank
+      example: "message"
+      selector:
+        select:
+          options:
+            - "theme"
+            - "clock"
+            - "message"
+            - "sensor"
+            - "image"
+            - "blank"
+    home_message:
+      name: Home message
+      description: Large message shown when home_face is "message".
+      example: "Storm warning"
+      selector:
+        text:
+    sensor_entity_id:
+      name: Sensor entity ID
+      description: HA entity ID to display when home_face is "sensor".
+      example: "sensor.living_room_temperature"
+      selector:
+        entity:
+    sensor_label:
+      name: Sensor label
+      description: Display label for the sensor face.
+      example: "Living Room"
+      selector:
+        text:
+    brightness:
+      name: Brightness
+      description: Display brightness override (0-100).
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    ttl_s:
+      name: TTL (seconds)
+      description: >
+        If set, the firmware reverts to the last full theme after this
+        many seconds. Omit or set to 0 for a sticky overlay.
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: seconds
+
+update_now_playing:
+  name: Update Now Playing
+  description: >
+    Stream a now-playing update to a dial's home face. Lightweight,
+    high-frequency — fire on track change, not on every progress tick.
+    Leave title blank to revert the dial to its theme-default home face.
+    Ephemeral — not persisted across reboot.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to target.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    title:
+      name: Track title
+      description: Blank reverts the dial to its theme-default home face.
+      example: "Dreams"
+      selector:
+        text:
+    artist:
+      name: Artist
+      example: "Fleetwood Mac"
+      selector:
+        text:
+    album_art_url:
+      name: Album art URL
+      description: Optional — the dial will attempt to fetch and display.
+      selector:
+        text:
+    source:
+      name: Source label
+      description: e.g. "Spotify", "Sonos", "AirPlay".
+      example: "Spotify"
+      selector:
+        text:
+    is_playing:
+      name: Is playing
+      description: When false, the face stays visible but dimmed.
+      default: true
+      selector:
+        boolean:
+
+update_from_media_player:
+  name: Update From Media Player
+  description: >
+    Read the current state of a media_player entity and stream it to a
+    Deckhand dial's now-playing face. Handles title, artist (or series
+    title for video), album art / poster, source, and playback state.
+    For always-on auto-push, configure a binding in the integration's
+    options instead of calling this service manually.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to target.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    entity_id:
+      name: Media Player
+      description: The media_player entity to mirror.
+      required: true
+      example: "media_player.living_room_tv"
+      selector:
+        entity:
+          domain: media_player
+
+update_sensor_value:
+  name: Update Sensor Value
+  description: >
+    Stream a sensor value update to a dial. Refreshes the sensor home face
+    in place when visible, otherwise buffered. Ephemeral.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial device to target.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    entity_id:
+      name: Source entity
+      description: HA entity id this reading belongs to.
+      required: true
+      example: "sensor.living_room_temp"
+      selector:
+        entity:
+    label:
+      name: Label
+      description: Short label shown above the value.
+      example: "Living Room"
+      selector:
+        text:
+    value:
+      name: Value
+      description: String or number. Rendered verbatim on the dial.
+      required: true
+      example: "72"
+      selector:
+        text:
+    unit:
+      name: Unit
+      example: "°F"
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: Optional FontAwesome-style glyph id for future use.
+      example: "fa-thermometer-half"
+      selector:
+        text:
+    color:
+      name: Tint color
+      description: Hex string like "#FFD700" to tint the value display.
+      example: "#FFD700"
+      selector:
+        text:
