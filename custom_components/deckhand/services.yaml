@@ -638,10 +638,62 @@ apply_overlay:
         entity:
     sensor_label:
       name: Sensor label
-      description: Display label for the sensor face.
+      description: Display label for the sensor face (slot 1).
       example: "Living Room"
       selector:
         text:
+    sensor_quad_2_entity_id:
+      name: Quad slot 2 entity
+      description: HA entity for the second quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_2_label:
+      name: Quad slot 2 label
+      selector:
+        text:
+    sensor_quad_3_entity_id:
+      name: Quad slot 3 entity
+      description: HA entity for the third quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_3_label:
+      name: Quad slot 3 label
+      selector:
+        text:
+    sensor_quad_4_entity_id:
+      name: Quad slot 4 entity
+      description: HA entity for the fourth quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_4_label:
+      name: Quad slot 4 label
+      selector:
+        text:
+    sensor_marquee:
+      name: Marquee entities
+      description: >
+        Up to 12 sensors that scroll across the dial as a marquee.
+        Pass a YAML list of either bare entity ids
+        (e.g. `- sensor.outdoor_temp`) or per-entry objects
+        (`- entity_id: sensor.x` / `label: "..."` / `unit: "°F"`).
+      example: |
+        - sensor.outdoor_temp
+        - entity_id: sensor.living_humidity
+          label: "Humidity"
+        - entity_id: sensor.battery_pct
+          label: "Battery"
+          unit: "%"
+      selector:
+        object:
+    marquee_position:
+      name: Marquee position
+      description: Where the scrolling marquee renders on the dial face.
+      default: subtitle
+      selector:
+        select:
+          options:
+            - subtitle
+            - ring
     brightness:
       name: Brightness
       description: Display brightness override (0-100).

@@ -94,6 +94,8 @@ _OVERLAY_STRING_FIELDS = (
     "sensor_entity_id",
     "sensor_label",
 )
+_OVERLAY_QUAD_SLOTS = (2, 3, 4)  # slot 1 is the legacy sensor_entity_id pair
+_OVERLAY_MARQUEE_POSITIONS = {"subtitle", "ring"}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -486,21 +488,19 @@ async def _push_sensor_value_for_entity(
     )
 
 
-def _bind_sensor_to_dial(
+def _bind_sensors_to_dial(
     hass: HomeAssistant,
     entry: DeckhandConfigEntry,
     dial_id: str,
     team_id: str,
-    entity_id: str,
-    label: str,
+    entities: list[tuple[str, str]],
 ) -> None:
-    """Wire up a state-change listener so the sensor face stays live.
+    """Wire up state-change listeners so every face entity stays live.
 
-    Replaces any previous binding for this dial — only one sensor face
-    can be active at a time. Reverting the dial to its theme face (e.g.
-    via another apply_overlay with home_face != "sensor") doesn't unwind
-    this listener, but the firmware will simply ignore the value updates
-    until the user points it at a new sensor.
+    Replaces any previous binding for this dial — last apply_overlay
+    wins. The dial only ever renders the entities the most-recent
+    overlay told it to show, so old listeners would just publish to
+    cmd/sensor_value for entities the firmware no longer cares about.
     """
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if store is None:
@@ -511,18 +511,25 @@ def _bind_sensor_to_dial(
         prev["unsub"]()
         bindings.pop(dial_id, None)
 
+    if not entities:
+        return
+
+    label_by_eid = {eid: lbl for eid, lbl in entities}
+    watched = list(label_by_eid.keys())
+
     @callback
     def _on_change(event: Event) -> None:
-        if event.data.get("entity_id") != entity_id:
+        eid = event.data.get("entity_id")
+        if eid not in label_by_eid:
             return
-        payload = _build_sensor_value_payload(hass, entity_id, label)
+        payload = _build_sensor_value_payload(hass, eid, label_by_eid[eid])
         if payload is None:
             return
         topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
         hass.async_create_task(mqtt.async_publish(hass, topic, json.dumps(payload)))
 
-    unsub = async_track_state_change_event(hass, [entity_id], _on_change)
-    bindings[dial_id] = {"entity_id": entity_id, "unsub": unsub}
+    unsub = async_track_state_change_event(hass, watched, _on_change)
+    bindings[dial_id] = {"entity_ids": watched, "unsub": unsub}
 
 
 @callback
@@ -851,28 +858,88 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 "apply_overlay requires at least one field to be set"
             )
 
+        # Multi-sensor block: quadrant slots 2-4 + marquee. Slot 1 is the
+        # legacy sensor_entity_id/sensor_label pair handled above; we fold
+        # it into the quad list here so the firmware's `sensors` parser
+        # owns all four slots in one place.
+        quad_entries: list[dict[str, Any]] = []
+        slot1_eid = call.data.get("sensor_entity_id")
+        slot1_lbl = call.data.get("sensor_label") or ""
+        if isinstance(slot1_eid, str) and slot1_eid.strip():
+            quad_entries.append({
+                "slot": 1,
+                "entity_id": slot1_eid.strip(),
+                "label": str(slot1_lbl)[:32],
+            })
+        for slot in _OVERLAY_QUAD_SLOTS:
+            eid = call.data.get(f"sensor_quad_{slot}_entity_id")
+            if not isinstance(eid, str) or not eid.strip():
+                continue
+            lbl = call.data.get(f"sensor_quad_{slot}_label") or ""
+            quad_entries.append({
+                "slot": slot,
+                "entity_id": eid.strip(),
+                "label": str(lbl)[:32],
+            })
+
+        marquee_entries: list[dict[str, Any]] = []
+        marquee_raw = call.data.get("sensor_marquee")
+        if isinstance(marquee_raw, list):
+            for item in marquee_raw[:12]:
+                if isinstance(item, str) and item.strip():
+                    marquee_entries.append({"entity_id": item.strip(), "label": "", "unit": ""})
+                elif isinstance(item, dict):
+                    eid = (item.get("entity_id") or "").strip()
+                    if not eid:
+                        continue
+                    marquee_entries.append({
+                        "entity_id": eid,
+                        "label": str(item.get("label") or "")[:24],
+                        "unit": str(item.get("unit") or "")[:8],
+                    })
+
+        marquee_position = call.data.get("marquee_position")
+        if marquee_position is not None and marquee_position not in _OVERLAY_MARQUEE_POSITIONS:
+            raise ServiceValidationError(
+                f"marquee_position must be one of {sorted(_OVERLAY_MARQUEE_POSITIONS)}"
+            )
+
+        if quad_entries or marquee_entries or marquee_position:
+            sensors_block: dict[str, Any] = {}
+            if quad_entries:
+                sensors_block["quad"] = quad_entries
+            if marquee_entries:
+                sensors_block["marquee"] = marquee_entries
+            if marquee_position:
+                sensors_block["marquee_position"] = marquee_position
+            payload["sensors"] = sensors_block
+            # Slot 1 was originally pushed via sensor_entity_id/sensor_label
+            # at the top level; the firmware's sensors-block path is a
+            # superset, so drop the legacy fields if they're present (the
+            # multi-block parser will set them via slot 1).
+            payload.pop("sensor_entity_id", None)
+            payload.pop("sensor_label", None)
+
         topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
         await mqtt.async_publish(hass, topic, json.dumps(payload))
         _LOGGER.info("Applied overlay to %s: %s", dial_id, sorted(payload.keys()))
 
-        # If the overlay points the dial at a sensor entity, immediately
-        # push the entity's current value so the face shows a number on
-        # arrival rather than the firmware's "—" placeholder. (cmd/overlay
-        # only ships the entity_id; the firmware never reaches into HA on
-        # its own.) We also set up a state-change listener below so the
-        # value keeps refreshing while the overlay is active.
-        sensor_eid = call.data.get("sensor_entity_id")
-        if isinstance(sensor_eid, str) and sensor_eid.strip():
-            await _push_sensor_value_for_entity(
-                hass,
-                team_id,
-                dial_id,
-                sensor_eid.strip(),
-                call.data.get("sensor_label") or "",
-            )
-            _bind_sensor_to_dial(
-                hass, entry, dial_id, team_id, sensor_eid.strip(),
-                call.data.get("sensor_label") or "",
+        # Push live values + register listeners for every entity the dial
+        # will display (legacy slot 1, quad 2-4, marquee). cmd/overlay only
+        # carries the entity_id; the firmware never reaches into HA on its
+        # own. Same auto-push + state-change-listener pattern that already
+        # makes slot 1 work for the sensor face.
+        bound_entities: list[tuple[str, str]] = []
+        for q in quad_entries:
+            bound_entities.append((q["entity_id"], q.get("label") or ""))
+        for m in marquee_entries:
+            bound_entities.append((m["entity_id"], m.get("label") or ""))
+
+        for eid, lbl in bound_entities:
+            await _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
+        if bound_entities:
+            _bind_sensors_to_dial(
+                hass, entry, dial_id, team_id, bound_entities,
             )
 
     async def _update_now_playing(call) -> None:
