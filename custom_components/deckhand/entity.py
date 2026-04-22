@@ -21,7 +21,7 @@ class DeckhandEntity(Entity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, dial_id)},
             manufacturer=MANUFACTURER,
-            name=f"Deckhand {dial_id}",
+            name=data.get("_label") or f"Deckhand {dial_id}",
             model=HARDWARE_MODELS.get(
                 data.get("hardware_type", "unknown"), "Deckhand Dial"
             ),
@@ -55,7 +55,7 @@ class DeckhandEntity(Entity):
                 self._attr_device_info = DeviceInfo(
                     identifiers={(DOMAIN, self._dial_id)},
                     manufacturer=MANUFACTURER,
-                    name=f"Deckhand {self._dial_id}",
+                    name=data.get("_label") or f"Deckhand {self._dial_id}",
                     model=HARDWARE_MODELS.get(
                         data.get("hardware_type", "unknown"), "Deckhand Dial"
                     ),

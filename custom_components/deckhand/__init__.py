@@ -109,6 +109,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
     hass.data[DOMAIN][entry.entry_id] = {
         "team_id": team_id,
         "dials": {},  # dial_id -> last heartbeat data
+        # dial_id -> friendly label captured from retained cmd/config.
+        # Kept separate from `dials` so an early config-only message
+        # doesn't masquerade as a discovered dial.
+        "labels": {},
         # (dial_id, entity_id) -> {"ts": float, "fingerprint": tuple}
         "_media_player_debounce": {},
         # Disposable that unsubs the active state-change listener. Swapped
@@ -142,6 +146,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             **payload,
             "_last_seen": datetime.now().isoformat(),
         }
+        # Layer in any friendly label captured from retained cmd/config.
+        label = store.get("labels", {}).get(dial_id)
+        if label:
+            enriched["_label"] = label
         store["dials"][dial_id] = enriched
 
         if is_new:
@@ -162,6 +170,57 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     entry.async_on_unload(
         await mqtt.async_subscribe(hass, status_topic, _handle_status, qos=0)
+    )
+
+    # Subscribe to retained cmd/config — Helm/Console publish the dial's
+    # friendly label here, so we use it as the device name (rather than
+    # the raw dial_id like "deckhand-A1B2C3"). The retained message means
+    # we get the label immediately on subscribe even if no fresh config
+    # push happens during this HA session.
+    config_topic = f"deckhand/{team_id}/dial/+/cmd/config"
+
+    @callback
+    def _handle_config(msg: mqtt.ReceiveMessage) -> None:
+        """Pick the dial's friendly label out of a cmd/config payload."""
+        try:
+            payload = json.loads(msg.payload)
+        except (json.JSONDecodeError, ValueError):
+            return
+        label = payload.get("label")
+        if not isinstance(label, str) or not label.strip():
+            return
+        label = label.strip()
+
+        parts = msg.topic.split("/")
+        if len(parts) < 5:
+            return
+        dial_id = parts[3]
+
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if not store:
+            return
+
+        prev_label = store["labels"].get(dial_id)
+        store["labels"][dial_id] = label
+
+        # If the dial has already heartbeated, mirror the label onto its
+        # live record so `update_from_status` picks it up on the next tick.
+        if dial_id in store["dials"]:
+            store["dials"][dial_id]["_label"] = label
+
+        # Update the device-registry entry so the name shows up in the HA
+        # UI immediately (sensor cards, automation pickers, etc.) without
+        # waiting for a restart. name_by_user wins in the UI if the user
+        # has manually renamed the device — we only set the integration's
+        # `name` field.
+        if prev_label != label:
+            registry = dr.async_get(hass)
+            device = registry.async_get_device(identifiers={(DOMAIN, dial_id)})
+            if device is not None:
+                registry.async_update_device(device.id, name=label)
+
+    entry.async_on_unload(
+        await mqtt.async_subscribe(hass, config_topic, _handle_config, qos=0)
     )
 
     # Subscribe to events for automation triggers
@@ -239,12 +298,18 @@ def _register_device(
     hw_type = data.get("hardware_type", "unknown")
     model = HARDWARE_MODELS.get(hw_type, hw_type)
 
+    # Prefer the friendly label captured from cmd/config (see _handle_config).
+    # Falls back to the raw dial_id when no label has been seen yet.
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    label = store.get("labels", {}).get(dial_id)
+    name = label or f"Deckhand {dial_id}"
+
     registry = dr.async_get(hass)
     registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, dial_id)},
         manufacturer=MANUFACTURER,
-        name=f"Deckhand {dial_id}",
+        name=name,
         model=model,
         sw_version=data.get("fw_ver"),
         configuration_url=f"http://{data.get('ip', '0.0.0.0')}",

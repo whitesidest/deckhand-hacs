@@ -53,8 +53,9 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
     _attr_name = "Brightness"
     _attr_icon = "mdi:brightness-6"
     _attr_native_min_value = 0
-    _attr_native_max_value = 255
+    _attr_native_max_value = 100
     _attr_native_step = 1
+    _attr_native_unit_of_measurement = "%"
     _attr_mode = NumberMode.SLIDER
 
     def __init__(
@@ -64,7 +65,7 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
         super().__init__(dial_id, data)
         self._entry = entry
         self._attr_unique_id = f"deckhand_{dial_id}_brightness"
-        self._attr_native_value = 180.0  # Reasonable default
+        self._attr_native_value = 80.0  # Reasonable default (0-100 scale)
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the brightness value — publishes MQTT config command."""
