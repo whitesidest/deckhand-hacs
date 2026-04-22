@@ -56,14 +56,19 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
     def __init__(
         self, dial_id: str, data: dict[str, Any], entry: ConfigEntry
     ) -> None:
-        """Initialize the theme selector."""
+        """Initialize the theme selector.
+
+        Note: ``self.hass`` isn't bound until the entity is added to HA, so
+        we can only seed options from constants here. The real catalog is
+        loaded from the integration cache in ``async_added_to_hass``.
+        """
         super().__init__(dial_id, data)
         self._entry = entry
         self._attr_unique_id = f"deckhand_{dial_id}_theme_select"
-        self._attr_options = self._options_from_store()
+        self._attr_options = list(DEFAULT_THEMES)
         current = data.get("current_theme")
         self._attr_current_option = (
-            current if current in self._attr_options else (self._attr_options[0] if self._attr_options else None)
+            current if current in self._attr_options else self._attr_options[0]
         )
 
     def _options_from_store(self) -> list[str]:
@@ -71,6 +76,8 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
 
         Falls back to ``DEFAULT_THEMES`` when the team hasn't published
         a themes/list yet (e.g. fresh broker, no Helm/Console connected).
+        Only safe to call once the entity has been added to HA — uses
+        ``self.hass``.
         """
         store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         themes = store.get("themes") or []
@@ -93,6 +100,16 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
     async def async_added_to_hass(self) -> None:
         """Subscribe to status + themes-catalog updates."""
         await super().async_added_to_hass()
+
+        # Now that self.hass is bound, refresh options from whatever the
+        # team's themes/list publish has populated. The MQTT subscribe
+        # in __init__.py has had the chance to fire by now, so the cache
+        # is usually warm.
+        cached = self._options_from_store()
+        if self._attr_current_option and self._attr_current_option not in cached:
+            cached = cached + [self._attr_current_option]
+        self._attr_options = cached
+        self.async_write_ha_state()
 
         @callback
         def _handle_update(event) -> None:
