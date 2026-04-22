@@ -430,7 +430,10 @@ apply_overlay:
             - "none"
     subtitle_text:
       name: Subtitle text
-      description: Text shown when subtitle_mode is "custom".
+      description: >
+        Custom text under the clock. Setting this without picking a
+        subtitle_mode automatically switches the dial to "custom" so the
+        text appears.
       example: "⚡ Lightning detected"
       selector:
         text:
@@ -455,7 +458,10 @@ apply_overlay:
         text:
     sensor_entity_id:
       name: Sensor entity ID
-      description: HA entity ID to display when home_face is "sensor".
+      description: >
+        HA entity to display when home_face is "sensor". The integration
+        publishes the entity's current value automatically, then keeps
+        the dial in sync as the value changes.
       example: "sensor.living_room_temperature"
       selector:
         entity:

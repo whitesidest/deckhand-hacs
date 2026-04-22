@@ -277,6 +277,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) ->
         store = hass.data[DOMAIN].pop(entry.entry_id, None)
         if store and store.get("_media_player_unsub"):
             store["_media_player_unsub"]()
+        for binding in (store or {}).get("_sensor_bindings", {}).values():
+            unsub = binding.get("unsub")
+            if unsub:
+                unsub()
     return unload_ok
 
 
@@ -419,6 +423,85 @@ async def _publish_now_playing(
     """Publish a now-playing payload to a dial over MQTT."""
     topic = TOPIC_CMD_NOW_PLAYING.format(team_id=team_id, dial_id=dial_id)
     await mqtt.async_publish(hass, topic, json.dumps(payload))
+
+
+def _build_sensor_value_payload(
+    hass: HomeAssistant, entity_id: str, label: str
+) -> dict[str, Any] | None:
+    """Pull a sensor reading + unit off an HA entity for cmd/sensor_value."""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    value = state.state
+    if value in (None, "", "unknown", "unavailable"):
+        return None
+    unit = state.attributes.get("unit_of_measurement") or ""
+    payload: dict[str, Any] = {
+        "entity_id": str(entity_id)[:128],
+        "label": str(label or state.attributes.get("friendly_name") or "")[:64],
+        "value": str(value)[:48],
+        "unit": str(unit)[:8],
+    }
+    return payload
+
+
+async def _push_sensor_value_for_entity(
+    hass: HomeAssistant, team_id: str, dial_id: str, entity_id: str, label: str
+) -> None:
+    """One-shot publish of the entity's current state to cmd/sensor_value."""
+    payload = _build_sensor_value_payload(hass, entity_id, label)
+    if payload is None:
+        _LOGGER.warning(
+            "apply_overlay: sensor_entity_id %s has no readable state — "
+            "dial will show '—' until the entity reports a value",
+            entity_id,
+        )
+        return
+    topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
+    await mqtt.async_publish(hass, topic, json.dumps(payload))
+    _LOGGER.info(
+        "apply_overlay: pushed initial sensor value %s=%s to %s",
+        entity_id, payload.get("value"), dial_id,
+    )
+
+
+def _bind_sensor_to_dial(
+    hass: HomeAssistant,
+    entry: DeckhandConfigEntry,
+    dial_id: str,
+    team_id: str,
+    entity_id: str,
+    label: str,
+) -> None:
+    """Wire up a state-change listener so the sensor face stays live.
+
+    Replaces any previous binding for this dial — only one sensor face
+    can be active at a time. Reverting the dial to its theme face (e.g.
+    via another apply_overlay with home_face != "sensor") doesn't unwind
+    this listener, but the firmware will simply ignore the value updates
+    until the user points it at a new sensor.
+    """
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if store is None:
+        return
+    bindings: dict[str, Any] = store.setdefault("_sensor_bindings", {})
+    prev = bindings.get(dial_id)
+    if prev:
+        prev["unsub"]()
+        bindings.pop(dial_id, None)
+
+    @callback
+    def _on_change(event: Event) -> None:
+        if event.data.get("entity_id") != entity_id:
+            return
+        payload = _build_sensor_value_payload(hass, entity_id, label)
+        if payload is None:
+            return
+        topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
+        hass.async_create_task(mqtt.async_publish(hass, topic, json.dumps(payload)))
+
+    unsub = async_track_state_change_event(hass, [entity_id], _on_change)
+    bindings[dial_id] = {"entity_id": entity_id, "unsub": unsub}
 
 
 @callback
@@ -690,12 +773,19 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         payload: dict[str, Any] = {}
 
         subtitle_mode = call.data.get("subtitle_mode")
+        subtitle_text = call.data.get("subtitle_text")
         if subtitle_mode is not None:
             if subtitle_mode not in _OVERLAY_SUBTITLE_MODES:
                 raise ServiceValidationError(
                     f"subtitle_mode must be one of {sorted(_OVERLAY_SUBTITLE_MODES)}"
                 )
             payload["subtitle_mode"] = subtitle_mode
+        elif isinstance(subtitle_text, str) and subtitle_text.strip():
+            # User supplied subtitle_text but didn't pick a mode. Without
+            # subtitle_mode=custom the firmware happily stores the text
+            # but never displays it (theme default mode wins) — auto-flip
+            # it so "type subtitle, see subtitle" is the obvious UX.
+            payload["subtitle_mode"] = "custom"
 
         home_face = call.data.get("home_face")
         if home_face is not None:
@@ -743,6 +833,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
         await mqtt.async_publish(hass, topic, json.dumps(payload))
         _LOGGER.info("Applied overlay to %s: %s", dial_id, sorted(payload.keys()))
+
+        # If the overlay points the dial at a sensor entity, immediately
+        # push the entity's current value so the face shows a number on
+        # arrival rather than the firmware's "—" placeholder. (cmd/overlay
+        # only ships the entity_id; the firmware never reaches into HA on
+        # its own.) We also set up a state-change listener below so the
+        # value keeps refreshing while the overlay is active.
+        sensor_eid = call.data.get("sensor_entity_id")
+        if isinstance(sensor_eid, str) and sensor_eid.strip():
+            await _push_sensor_value_for_entity(
+                hass,
+                team_id,
+                dial_id,
+                sensor_eid.strip(),
+                call.data.get("sensor_label") or "",
+            )
+            _bind_sensor_to_dial(
+                hass, entry, dial_id, team_id, sensor_eid.strip(),
+                call.data.get("sensor_label") or "",
+            )
 
     async def _update_now_playing(call) -> None:
         """Stream a now-playing update to a dial (cmd/now_playing).
