@@ -533,7 +533,11 @@ async def _push_sensor_value_for_entity(
         )
         return
     topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
-    await mqtt.async_publish(hass, topic, json.dumps(payload))
+    # Retain so the dial picks up the latest value on reconnect — without
+    # this, a reboot or wifi blip would blank the sensor face to "—" until
+    # the entity next changes state in HA, which for slow-moving sensors
+    # (battery %, freezer temp) could be hours.
+    await mqtt.async_publish(hass, topic, json.dumps(payload), retain=True)
     _LOGGER.info(
         "apply_overlay: pushed initial sensor value %s=%s to %s",
         entity_id, payload.get("value"), dial_id,
@@ -578,7 +582,11 @@ def _bind_sensors_to_dial(
         if payload is None:
             return
         topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
-        hass.async_create_task(mqtt.async_publish(hass, topic, json.dumps(payload)))
+        # Retain so a dial reboot doesn't lose the cached value — see the
+        # rationale in _push_sensor_value_for_entity.
+        hass.async_create_task(
+            mqtt.async_publish(hass, topic, json.dumps(payload), retain=True)
+        )
 
     unsub = async_track_state_change_event(hass, watched, _on_change)
     bindings[dial_id] = {"entity_ids": watched, "unsub": unsub}
