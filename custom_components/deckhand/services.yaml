@@ -702,6 +702,15 @@ apply_overlay:
           min: 0
           max: 100
           unit_of_measurement: "%"
+    hide_label:
+      name: Hide Label
+      description: >
+        When true, the dial stops rendering its label above the clock.
+        One-shot — survives until the next overlay or reboot. To make
+        the change persistent, save the dial-level "Hide Label" setting
+        in Helm or Console.
+      selector:
+        boolean:
     ttl_s:
       name: TTL (seconds)
       description: >

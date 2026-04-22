@@ -902,6 +902,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 raise ServiceValidationError("brightness must be 0-100")
             payload["brightness"] = b
 
+        hide_label = call.data.get("hide_label")
+        if hide_label is not None:
+            payload["hide_label"] = bool(hide_label)
+
         ttl_s = call.data.get("ttl_s")
         if ttl_s is not None:
             try:
