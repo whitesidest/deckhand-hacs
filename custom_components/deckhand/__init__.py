@@ -425,6 +425,28 @@ async def _publish_now_playing(
     await mqtt.async_publish(hass, topic, json.dumps(payload))
 
 
+def _format_sensor_value(raw: Any) -> str:
+    """Trim sensor readings to something a 240x240 dial can display cleanly.
+
+    Home Assistant hands us string states like "21.3333333333334"; that's
+    unreadable on a 2.8cm glass circle. Round floats to 2 decimals, leave
+    integers alone (no trailing ".00" on a count), and pass non-numeric
+    strings through so statuses like "heating" or "home" render verbatim.
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    try:
+        f = float(s)
+    except (TypeError, ValueError):
+        return s[:48]
+    if f.is_integer() and "." not in s and "e" not in s.lower():
+        return str(int(f))[:48]
+    return f"{f:.2f}"[:48]
+
+
 def _build_sensor_value_payload(
     hass: HomeAssistant, entity_id: str, label: str
 ) -> dict[str, Any] | None:
@@ -432,14 +454,13 @@ def _build_sensor_value_payload(
     state = hass.states.get(entity_id)
     if state is None:
         return None
-    value = state.state
-    if value in (None, "", "unknown", "unavailable"):
+    if state.state in (None, "", "unknown", "unavailable"):
         return None
     unit = state.attributes.get("unit_of_measurement") or ""
     payload: dict[str, Any] = {
         "entity_id": str(entity_id)[:128],
         "label": str(label or state.attributes.get("friendly_name") or "")[:64],
-        "value": str(value)[:48],
+        "value": _format_sensor_value(state.state),
         "unit": str(unit)[:8],
     }
     return payload
@@ -963,14 +984,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         value = call.data.get("value", "")
         # Accept numbers or strings; publish as string so the dial's parser
-        # can render verbatim without locale issues.
-        if value is None:
-            value = ""
-
+        # can render verbatim without locale issues. Float values get
+        # rounded to two decimals so template sensors that pass raw HA
+        # readings ("21.3333333333333") render cleanly on the dial.
         payload: dict[str, Any] = {
             "entity_id": str(entity_id)[:128],
             "label": str(call.data.get("label") or "")[:64],
-            "value": str(value)[:48],
+            "value": _format_sensor_value(value),
             "unit": str(call.data.get("unit") or "")[:8],
         }
         icon = call.data.get("icon")
