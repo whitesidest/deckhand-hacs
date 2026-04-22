@@ -115,6 +115,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # Kept separate from `dials` so an early config-only message
         # doesn't masquerade as a discovered dial.
         "labels": {},
+        # Team's catalog of [{slug, name, is_system}] from the retained
+        # `deckhand/{team_id}/themes/list` topic. Empty until the first
+        # message arrives — the select entity falls back to
+        # DEFAULT_THEMES so the picker is never blank.
+        "themes": [],
         # (dial_id, entity_id) -> {"ts": float, "fingerprint": tuple}
         "_media_player_debounce": {},
         # Disposable that unsubs the active state-change listener. Swapped
@@ -223,6 +228,53 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     entry.async_on_unload(
         await mqtt.async_subscribe(hass, config_topic, _handle_config, qos=0)
+    )
+
+    # Subscribe to the team's published themes catalog. Helm + Console
+    # republish this retained whenever a theme is created/edited/deleted
+    # so HACS can offer a real per-dial picker that reflects the team's
+    # *custom* themes — not just the hardcoded system list shipped in
+    # services.yaml. Empty/missing topic falls back to DEFAULT_THEMES.
+    themes_topic = f"deckhand/{team_id}/themes/list"
+
+    @callback
+    def _handle_themes_list(msg: mqtt.ReceiveMessage) -> None:
+        try:
+            payload = json.loads(msg.payload)
+        except (json.JSONDecodeError, ValueError):
+            _LOGGER.warning("Invalid JSON on %s", msg.topic)
+            return
+        themes = payload.get("themes")
+        if not isinstance(themes, list):
+            return
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if not store:
+            return
+        # Normalize to a stable {slug, name, is_system} list. Drop
+        # entries missing a slug so a malformed payload can't strand
+        # the picker on a blank option.
+        normalized = []
+        for t in themes:
+            if not isinstance(t, dict):
+                continue
+            slug = t.get("slug")
+            if not isinstance(slug, str) or not slug:
+                continue
+            normalized.append({
+                "slug": slug,
+                "name": str(t.get("name") or slug),
+                "is_system": bool(t.get("is_system", False)),
+            })
+        store["themes"] = normalized
+        # Tell every dial-Theme entity to re-read the cache so users
+        # see the new theme appear without a HA restart.
+        from homeassistant.helpers.dispatcher import async_dispatcher_send
+        async_dispatcher_send(hass, f"{DOMAIN}_themes_updated")
+        _LOGGER.info("Themes catalog updated: %d themes for team %s",
+                     len(normalized), team_id)
+
+    entry.async_on_unload(
+        await mqtt.async_subscribe(hass, themes_topic, _handle_themes_list, qos=0)
     )
 
     # Subscribe to events for automation triggers

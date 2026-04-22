@@ -60,8 +60,22 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         super().__init__(dial_id, data)
         self._entry = entry
         self._attr_unique_id = f"deckhand_{dial_id}_theme_select"
-        self._attr_options = list(DEFAULT_THEMES)
-        self._attr_current_option = data.get("current_theme", DEFAULT_THEMES[0])
+        self._attr_options = self._options_from_store()
+        current = data.get("current_theme")
+        self._attr_current_option = (
+            current if current in self._attr_options else (self._attr_options[0] if self._attr_options else None)
+        )
+
+    def _options_from_store(self) -> list[str]:
+        """Pull the current theme catalog out of the integration cache.
+
+        Falls back to ``DEFAULT_THEMES`` when the team hasn't published
+        a themes/list yet (e.g. fresh broker, no Helm/Console connected).
+        """
+        store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        themes = store.get("themes") or []
+        slugs = [t["slug"] for t in themes if isinstance(t, dict) and t.get("slug")]
+        return slugs or list(DEFAULT_THEMES)
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected theme — publishes MQTT command."""
@@ -77,7 +91,7 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         _LOGGER.info("Set theme '%s' on %s", option, self._dial_id)
 
     async def async_added_to_hass(self) -> None:
-        """Subscribe to status updates when added to hass."""
+        """Subscribe to status + themes-catalog updates."""
         await super().async_added_to_hass()
 
         @callback
@@ -90,12 +104,32 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
             if theme and theme in self._attr_options:
                 self._attr_current_option = theme
             elif theme:
-                # Theme not in list — add it dynamically
-                self._attr_options.append(theme)
+                # Theme not in catalog — surface it anyway so the
+                # current value renders (HA hides selects whose value
+                # isn't in options).
+                self._attr_options = self._attr_options + [theme]
                 self._attr_current_option = theme
             self.update_from_status(data)
             self.async_write_ha_state()
 
         self.async_on_remove(
             self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
+        )
+
+        @callback
+        def _handle_themes_updated() -> None:
+            """Refresh the picker when the team's catalog changes."""
+            new_options = self._options_from_store()
+            # Keep the currently-applied theme visible even if it was
+            # removed from the catalog (rare — usually means a custom
+            # theme got deleted while still active on a dial).
+            if self._attr_current_option and self._attr_current_option not in new_options:
+                new_options = new_options + [self._attr_current_option]
+            self._attr_options = new_options
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, f"{DOMAIN}_themes_updated", _handle_themes_updated
+            )
         )
