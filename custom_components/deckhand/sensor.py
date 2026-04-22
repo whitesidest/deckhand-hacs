@@ -11,10 +11,10 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    LIGHT_LUX,
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfTemperature,
-    UnitOfIlluminance,
 )
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -71,7 +71,7 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
         "name": "Ambient Light",
         "device_class": SensorDeviceClass.ILLUMINANCE,
         "state_class": SensorStateClass.MEASUREMENT,
-        "unit": UnitOfIlluminance.LUX,
+        "unit": LIGHT_LUX,
         "icon": None,
         "entity_category": None,
         "optional": True,
