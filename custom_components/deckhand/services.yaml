@@ -765,6 +765,16 @@ update_now_playing:
       default: true
       selector:
         boolean:
+    entity_id:
+      name: Source entity (optional)
+      description: >
+        HA media_player entity id this update represents. When set, a
+        play/pause click on the dial controls THIS entity. When omitted,
+        the dial falls back to the room's default media_player binding.
+      example: "media_player.jellyfin_galaxy_tab"
+      selector:
+        entity:
+          domain: media_player
 
 update_from_media_player:
   name: Update From Media Player

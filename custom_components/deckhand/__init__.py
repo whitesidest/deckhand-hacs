@@ -457,6 +457,12 @@ def _extract_now_playing(
     is_playing = state.state == "playing"
 
     payload: dict[str, Any] = {
+        # Echo the entity id so the dial can target the right
+        # media_player when the user taps play/pause on the now-playing
+        # face. Without it the server falls back to the dial's room
+        # media_player binding, which is rarely what HA is currently
+        # tracking (e.g. tablet Jellyfin vs. Office speakers).
+        "entity_id": entity_id,
         "title": str(title)[:96],
         "artist": str(artist)[:96],
         "source": str(source)[:32],
@@ -1036,6 +1042,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             "source": str(call.data.get("source") or "")[:32],
             "is_playing": bool(call.data.get("is_playing", True)),
         }
+        # Optional entity_id — when provided, the dial echoes it back on
+        # play/pause click so the server can target the actual playing
+        # media_player rather than the room's default binding.
+        entity = call.data.get("entity_id")
+        if isinstance(entity, str) and entity.strip():
+            payload["entity_id"] = entity.strip()
         art = call.data.get("album_art_url")
         if art:
             payload["album_art_url"] = str(art)[:256]
