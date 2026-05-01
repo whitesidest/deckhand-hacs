@@ -188,8 +188,6 @@ push_theme:
               label: Kelpcurrent
             - value: sakura
               label: Sakura Dawn
-            - value: match_day
-              label: Match Day
 
 send_announcement:
   name: Send Announcement
@@ -226,7 +224,11 @@ send_announcement:
           unit_of_measurement: seconds
     animation:
       name: Animation
-      description: Visual effect to play behind the announcement.
+      description: >
+        Visual effect to play behind the announcement. Aesthetic keys
+        (sparkle, snow, …) inherit the dial's theme accent. Semantic
+        keys (signal:*) carry meaning — color and haptic are theme-
+        invariant. signal:emergency adds a haptic pulse.
       default: "none"
       selector:
         select:
@@ -245,6 +247,15 @@ send_announcement:
             - snow
             - aurora
             - ripple
+            - "signal:ready"
+            - "signal:question"
+            - "signal:available"
+            - "signal:timed_state"
+            - "signal:overdue"
+            - "signal:comfort"
+            - "signal:priority"
+            - "signal:emergency"
+            - "signal:dnd"
 
 send_countdown:
   name: Send Countdown
@@ -482,8 +493,6 @@ send_countdown:
               label: Kelpcurrent
             - value: sakura
               label: Sakura Dawn
-            - value: match_day
-              label: Match Day
     lead_seconds:
       name: Lead Time (seconds)
       description: How long before the target the countdown should start.

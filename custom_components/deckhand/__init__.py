@@ -10,7 +10,7 @@ from typing import Any
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError, Unauthorized
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -139,10 +139,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             _LOGGER.warning("Invalid JSON on %s", msg.topic)
             return
 
-        dial_id = payload.get("device_id")
-        if not dial_id:
-            _LOGGER.warning("Status message missing device_id on %s", msg.topic)
+        # Trust the topic, not the payload. The dial_id from the topic
+        # was authenticated by the broker ACL; the `device_id` field in
+        # the body is attacker-controllable if the broker is shared
+        # with other tenants / integrations.
+        parts = msg.topic.split("/")
+        topic_dial_id = parts[3] if len(parts) >= 4 else ""
+        payload_device_id = payload.get("device_id") or ""
+        if not topic_dial_id:
+            _LOGGER.warning("Status message has malformed topic: %s", msg.topic)
             return
+        if payload_device_id and payload_device_id != topic_dial_id:
+            _LOGGER.warning(
+                "Status device_id=%s does not match topic slot=%s on %s — dropping",
+                payload_device_id,
+                topic_dial_id,
+                msg.topic,
+            )
+            return
+        dial_id = topic_dial_id
 
         store = hass.data[DOMAIN].get(entry.entry_id)
         if not store:
@@ -250,19 +265,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         store = hass.data[DOMAIN].get(entry.entry_id)
         if not store:
             return
+        # Guardrails against a hostile broker publisher ballooning the
+        # picker or injecting display strings. Caps mirror the
+        # firmware/UI limits — anything beyond these would be junk.
+        import re
+
+        MAX_THEMES = 256
+        MAX_SLUG_LEN = 64
+        MAX_NAME_LEN = 128
+        SLUG_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
         # Normalize to a stable {slug, name, is_system} list. Drop
         # entries missing a slug so a malformed payload can't strand
         # the picker on a blank option.
         normalized = []
-        for t in themes:
+        for t in themes[:MAX_THEMES]:
             if not isinstance(t, dict):
                 continue
             slug = t.get("slug")
-            if not isinstance(slug, str) or not slug:
+            if not isinstance(slug, str) or not SLUG_RE.match(slug):
                 continue
+            name = str(t.get("name") or slug)[:MAX_NAME_LEN]
             normalized.append({
-                "slug": slug,
-                "name": str(t.get("name") or slug),
+                "slug": slug[:MAX_SLUG_LEN],
+                "name": name,
                 "is_system": bool(t.get("is_system", False)),
             })
         store["themes"] = normalized
@@ -362,16 +388,32 @@ def _register_device(
     label = store.get("labels", {}).get(dial_id)
     name = label or f"Deckhand {dial_id}"
 
+    # Only build a configuration_url when the IP looks like a valid
+    # address. A hostile publisher with MQTT access could otherwise
+    # set `ip` to an arbitrary string that becomes a clickable link
+    # in the HA devices UI.
+    import ipaddress
+
+    raw_ip = str(data.get("ip") or "").strip()
+    configuration_url = None
+    try:
+        ipaddress.ip_address(raw_ip)
+        configuration_url = f"http://{raw_ip}"
+    except ValueError:
+        configuration_url = None
+
     registry = dr.async_get(hass)
-    registry.async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, dial_id)},
-        manufacturer=MANUFACTURER,
-        name=name,
-        model=model,
-        sw_version=data.get("fw_ver"),
-        configuration_url=f"http://{data.get('ip', '0.0.0.0')}",
-    )
+    kwargs: dict[str, Any] = {
+        "config_entry_id": entry.entry_id,
+        "identifiers": {(DOMAIN, dial_id)},
+        "manufacturer": MANUFACTURER,
+        "name": name,
+        "model": model,
+        "sw_version": data.get("fw_ver"),
+    }
+    if configuration_url:
+        kwargs["configuration_url"] = configuration_url
+    registry.async_get_or_create(**kwargs)
 
 
 async def _async_add_dial_entities(
@@ -700,8 +742,31 @@ def _reload_media_player_listeners(
 def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
     """Register Deckhand services."""
 
+    # Write-side services (push_theme, reboot, apply_overlay, etc.) take
+    # real action on physical hardware and broadcast to every dial in
+    # the team. Gate them behind HA admin — a guest on the household
+    # Lovelace shouldn't be able to reboot the lobby dials or replace
+    # an announcement with attacker copy.
+    async def _require_admin(call) -> None:
+        user_id = getattr(getattr(call, "context", None), "user_id", None)
+        if not user_id:
+            return  # Internal / automation call — allow.
+        user = await hass.auth.async_get_user(user_id)
+        if user is None or user.is_admin:
+            return
+        _LOGGER.warning(
+            "Non-admin user %s attempted to call deckhand service %s",
+            user.name or user_id,
+            getattr(call, "service", "?"),
+        )
+        raise Unauthorized(
+            context=call.context,
+            permission="deckhand.admin_service",
+        )
+
     async def _push_theme(call) -> None:
-        """Push a theme to a dial."""
+        """Push a theme to a dial (admin-only)."""
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         theme = call.data.get("theme")
         if not isinstance(theme, str) or not theme.strip():
@@ -725,7 +790,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         _LOGGER.info("Pushed theme '%s' to %s", theme, dial_id)
 
     async def _send_announcement(call) -> None:
-        """Send an announcement to a dial."""
+        """Send an announcement to a dial (admin-only)."""
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         message = call.data.get("message")
         from_name = call.data.get("from_name", "Home Assistant")
@@ -767,6 +833,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _send_countdown(call) -> None:
+        await _require_admin(call)
         """Send a countdown announcement to a dial.
 
         Mirrors _send_announcement but layers in the countdown_to,
@@ -845,6 +912,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _apply_overlay(call) -> None:
+        await _require_admin(call)
         """Apply a partial-theme overlay to a dial.
 
         Unlike push_theme, this does NOT replace the dial's current
@@ -1013,6 +1081,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
 
     async def _update_now_playing(call) -> None:
+        await _require_admin(call)
         """Stream a now-playing update to a dial (cmd/now_playing).
 
         High-frequency ephemeral update. Empty title reverts to the theme-
@@ -1057,6 +1126,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         _LOGGER.debug("Now-playing -> %s: %s", dial_id, payload.get("title"))
 
     async def _update_from_media_player(call) -> None:
+        await _require_admin(call)
         """Extract now-playing fields from a media_player entity and publish.
 
         Thin wrapper that reads the entity's current state + attributes,
@@ -1103,6 +1173,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         await _publish_now_playing(hass, entry, dial_id, team_id, payload)
 
     async def _update_sensor_value(call) -> None:
+        await _require_admin(call)
         """Stream a sensor-value update to a dial (cmd/sensor_value).
 
         High-frequency ephemeral update. If the dial is currently on the
@@ -1148,7 +1219,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         _LOGGER.debug("Sensor-value -> %s: %s=%s", dial_id, entity_id, value)
 
     async def _reboot(call) -> None:
-        """Reboot a dial."""
+        """Reboot a dial (admin-only)."""
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         resolved = _resolve_dial(hass, device_id)
         if not resolved:
@@ -1165,6 +1237,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         _LOGGER.info("Sent reboot command to %s", dial_id)
 
     async def _set_timezone(call) -> None:
+        await _require_admin(call)
         """Push a per-dial timezone via cmd/config.
 
         The firmware does ``setenv("TZ", value, 1); tzset()`` with whatever
