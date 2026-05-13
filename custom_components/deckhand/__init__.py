@@ -87,11 +87,14 @@ _IANA_TO_POSIX = {
 }
 
 # Overlay field validation — apply_overlay is atmosphere-only now.
-# Face-shaping (sensor quads, weather entity, message body, subtitle
-# mode, etc.) moved off the Theme model in the 2026-05-11 schema split
-# and is published via cmd/face/<kind>/mount (see ``mount_face``,
-# ``mount_perimeter_pulse``, ``mount_night_watch``).
+# Face-shaping (sensor quads, weather entity, message body) moved off
+# the Theme model in the 2026-05-11 schema split and is published via
+# cmd/face/<kind>/mount (see ``mount_face``, ``mount_perimeter_pulse``,
+# ``mount_night_watch``). Subtitle mode + text are kept here because
+# subtitle is a transient atmosphere flash that the firmware merges
+# onto whichever face is currently mounted (see apply_display_overlay).
 _OVERLAY_STRING_FIELDS = ("subtitle_text",)
+_OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1053,6 +1056,22 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
 
         payload: dict[str, Any] = {}
+
+        subtitle_mode = call.data.get("subtitle_mode")
+        subtitle_text = call.data.get("subtitle_text")
+        if subtitle_mode is not None:
+            if subtitle_mode not in _OVERLAY_SUBTITLE_MODES:
+                raise ServiceValidationError(
+                    f"subtitle_mode must be one of {sorted(_OVERLAY_SUBTITLE_MODES)}"
+                )
+            payload["subtitle_mode"] = subtitle_mode
+        elif isinstance(subtitle_text, str) and subtitle_text.strip():
+            # Operator supplied subtitle_text without a mode. Without
+            # subtitle_mode=custom the firmware stores the string but
+            # never displays it (the active mode wins), so auto-flip
+            # to custom — "type subtitle, see subtitle" is the
+            # obvious UX.
+            payload["subtitle_mode"] = "custom"
 
         for key in _OVERLAY_STRING_FIELDS:
             val = call.data.get(key)

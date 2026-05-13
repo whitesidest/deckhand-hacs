@@ -598,13 +598,29 @@ apply_overlay:
       selector:
         device:
           integration: deckhand
+    subtitle_mode:
+      name: Subtitle mode
+      description: >
+        How the dial picks the subtitle source. ``theme`` follows the
+        theme default, ``custom`` shows the ``subtitle_text`` you provide,
+        ``date`` / ``date_year`` show the calendar date, ``none`` hides
+        the subtitle entirely.
+      example: "custom"
+      selector:
+        select:
+          options:
+            - "theme"
+            - "custom"
+            - "date"
+            - "date_year"
+            - "none"
     subtitle_text:
       name: Subtitle text
       description: >
         Transient subtitle flash under the clock. Use for short-lived
-        notifications (e.g. "⚡ Lightning"). Persistent subtitle modes
-        live on the Clock Face — edit there for "always-on" subtitles.
-      example: "⚡ Lightning detected"
+        notifications. Supplying text without picking a mode auto-flips
+        the dial into ``custom`` so the text is actually shown.
+      example: "Lightning detected"
       selector:
         text:
     brightness:
