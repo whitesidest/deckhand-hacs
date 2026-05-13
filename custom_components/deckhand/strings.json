@@ -56,6 +56,21 @@
     },
     "empty_message": {
       "message": "Announcement message cannot be empty."
+    },
+    "invalid_bindings": {
+      "message": "Provide a non-empty bindings array. Each binding needs at least an id."
+    },
+    "invalid_states": {
+      "message": "Provide a non-empty states array. Each entry needs an id and at least one of state/value/event."
+    },
+    "invalid_sequence": {
+      "message": "Provide a non-empty sequence. Each step needs an id."
+    },
+    "invalid_face_id": {
+      "message": "A non-empty face_id is required."
+    },
+    "invalid_payload": {
+      "message": "Payload must be a dictionary."
     }
   },
   "services": {

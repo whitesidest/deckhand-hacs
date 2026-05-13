@@ -30,6 +30,18 @@ TOPIC_CMD_OVERLAY = "deckhand/{team_id}/dial/{dial_id}/cmd/overlay"
 TOPIC_CMD_NOW_PLAYING = "deckhand/{team_id}/dial/{dial_id}/cmd/now_playing"
 TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
 
+# Phase 6 dial-platform — face dispatch topics. {face_id} is the
+# face identifier (e.g. "perimeter_pulse", "night_watch") chosen by
+# the firmware face registry.
+TOPIC_CMD_FACE_MOUNT  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/mount"
+TOPIC_CMD_FACE_STATE  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/state"
+TOPIC_CMD_FACE_CONFIG = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/config"
+
+# Perimeter Pulse treatment names recognised by the firmware. Kept here so
+# the HACS service schema can validate without the user having to re-read
+# the firmware source.
+PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
+
 # Default heartbeat timeout (seconds) — mark offline/unavailable if no
 # heartbeat received within this window.
 HEARTBEAT_TIMEOUT = 120

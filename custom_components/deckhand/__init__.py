@@ -29,9 +29,13 @@ from .const import (
     MANUFACTURER,
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
+    PERIMETER_TREATMENTS,
     PLATFORMS,
     TOPIC_CMD_ANNOUNCE,
     TOPIC_CMD_CONFIG,
+    TOPIC_CMD_FACE_CONFIG,
+    TOPIC_CMD_FACE_MOUNT,
+    TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
     TOPIC_CMD_OVERLAY,
     TOPIC_CMD_REBOOT,
@@ -82,20 +86,12 @@ _IANA_TO_POSIX = {
     "UTC": "UTC0",
 }
 
-# Overlay field validation — mirrors
-# helm/apps/themes/services/overlay.py. Keep in sync. We fail fast in
-# HA land rather than rely on the firmware to silently ignore bad input
-# so automation authors see meaningful errors.
-_OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
-_OVERLAY_HOME_FACES = {"theme", "clock", "message", "sensor", "image", "blank"}
-_OVERLAY_STRING_FIELDS = (
-    "subtitle_text",
-    "home_message",
-    "sensor_entity_id",
-    "sensor_label",
-)
-_OVERLAY_QUAD_SLOTS = (2, 3, 4)  # slot 1 is the legacy sensor_entity_id pair
-_OVERLAY_MARQUEE_POSITIONS = {"subtitle", "ring"}
+# Overlay field validation — apply_overlay is atmosphere-only now.
+# Face-shaping (sensor quads, weather entity, message body, subtitle
+# mode, etc.) moved off the Theme model in the 2026-05-11 schema split
+# and is published via cmd/face/<kind>/mount (see ``mount_face``,
+# ``mount_perimeter_pulse``, ``mount_night_watch``).
+_OVERLAY_STRING_FIELDS = ("subtitle_text",)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +116,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # message arrives — the select entity falls back to
         # DEFAULT_THEMES so the picker is never blank.
         "themes": [],
+        # group_id (str of int) -> {id, slug, name, dial_ids: [...]} from
+        # the retained `deckhand/{team_id}/groups/list` topic. Used by
+        # the service handlers to fan a single Room device target out to
+        # every member dial. Each entry is also registered as an HA
+        # device with identifier (DOMAIN, f"group:{id}") so the existing
+        # device-selector picks it up alongside individual dials.
+        "groups": {},
         # (dial_id, entity_id) -> {"ts": float, "fingerprint": tuple}
         "_media_player_debounce": {},
         # Disposable that unsubs the active state-change listener. Swapped
@@ -301,6 +304,94 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     entry.async_on_unload(
         await mqtt.async_subscribe(hass, themes_topic, _handle_themes_list, qos=0)
+    )
+
+    # Subscribe to the team's published rooms catalog. Helm publishes
+    # this retained whenever a DialGroup is created/edited/deleted or a
+    # dial is added/removed/renamed so HACS can register each room as a
+    # Home Assistant device. Service handlers expand a Room device_id
+    # to its member dial_ids and fan the publish out across the group.
+    groups_topic = f"deckhand/{team_id}/groups/list"
+
+    @callback
+    def _handle_groups_list(msg: mqtt.ReceiveMessage) -> None:
+        try:
+            payload = json.loads(msg.payload)
+        except (json.JSONDecodeError, ValueError):
+            _LOGGER.warning("Invalid JSON on %s", msg.topic)
+            return
+        groups = payload.get("groups")
+        if not isinstance(groups, list):
+            return
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if not store:
+            return
+
+        # Same guardrails as themes — a hostile broker publisher
+        # shouldn't be able to balloon the device registry or inject
+        # control characters into device names.
+        MAX_GROUPS = 256
+        MAX_NAME_LEN = 128
+        MAX_DIALS_PER_GROUP = 256
+
+        normalized: dict[str, dict[str, Any]] = {}
+        for g in groups[:MAX_GROUPS]:
+            if not isinstance(g, dict):
+                continue
+            gid = g.get("id")
+            if not isinstance(gid, int):
+                continue
+            name = str(g.get("name") or f"Room {gid}")[:MAX_NAME_LEN]
+            slug = str(g.get("slug") or "")[:MAX_NAME_LEN]
+            raw_dials = g.get("dial_ids") or []
+            if not isinstance(raw_dials, list):
+                raw_dials = []
+            dial_ids = [
+                str(d)[:64]
+                for d in raw_dials[:MAX_DIALS_PER_GROUP]
+                if isinstance(d, str) and d.strip()
+            ]
+            normalized[str(gid)] = {
+                "id": gid,
+                "slug": slug,
+                "name": name,
+                "dial_ids": dial_ids,
+            }
+
+        prev_ids = set(store["groups"].keys())
+        store["groups"] = normalized
+
+        # Register each group as an HA device so it appears alongside
+        # individual dials in the device selector. Identifier prefix
+        # `group:` namespaces it from raw dial_ids and serves as the
+        # disambiguator for _resolve_dial.
+        registry = dr.async_get(hass)
+        for gid, group in normalized.items():
+            registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, f"group:{gid}")},
+                manufacturer=MANUFACTURER,
+                model="Room",
+                name=group["name"],
+            )
+
+        # Deregister rooms that vanished from the published list — the
+        # operator deleted them in Helm or moved them to a different
+        # team. Leaving them stranded would surface dead targets in the
+        # service picker.
+        removed = prev_ids - set(normalized.keys())
+        for gid in removed:
+            device = registry.async_get_device(identifiers={(DOMAIN, f"group:{gid}")})
+            if device is not None:
+                registry.async_remove_device(device.id)
+
+        _LOGGER.info(
+            "Rooms catalog updated: %d groups for team %s (added/refreshed=%d, removed=%d)",
+            len(normalized), team_id, len(normalized), len(removed),
+        )
+
+    entry.async_on_unload(
+        await mqtt.async_subscribe(hass, groups_topic, _handle_groups_list, qos=0)
     )
 
     # Subscribe to events for automation triggers
@@ -549,6 +640,31 @@ def _format_sensor_value(raw: Any) -> str:
     return f"{f:.2f}"[:48]
 
 
+# Glyphs the LVGL Montserrat firmware font can't render — substitute to
+# ASCII before shipping the unit field on cmd/sensor_value. Mirrors the
+# table in helm/apps/devices/tasks.py:_DIAL_UNIT_GLYPH_MAP. Without this,
+# units like "μg/m³" land as tofu rectangles on the dial. Memory file
+# feedback_dial_font_ascii_only.md has the full rationale + glyph list.
+_DIAL_UNIT_GLYPH_MAP = {
+    "µ": "u",   # MICRO SIGN
+    "μ": "u",   # GREEK SMALL LETTER MU
+    "²": "2",
+    "³": "3",
+    "½": "1/2",
+    "¼": "1/4",
+    "¾": "3/4",
+    "°": "*",
+    " ": " ",   # thin space
+    " ": " ",   # narrow no-break space
+}
+
+
+def _safe_unit_for_dial(unit: str) -> str:
+    if not unit:
+        return ""
+    return "".join(_DIAL_UNIT_GLYPH_MAP.get(ch, ch) for ch in unit)
+
+
 def _build_sensor_value_payload(
     hass: HomeAssistant, entity_id: str, label: str
 ) -> dict[str, Any] | None:
@@ -563,7 +679,7 @@ def _build_sensor_value_payload(
         "entity_id": str(entity_id)[:128],
         "label": str(label or state.attributes.get("friendly_name") or "")[:64],
         "value": _format_sensor_value(state.state),
-        "unit": str(unit)[:8],
+        "unit": _safe_unit_for_dial(str(unit))[:8],
     }
     return payload
 
@@ -765,7 +881,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _push_theme(call) -> None:
-        """Push a theme to a dial (admin-only)."""
+        """Push a theme to a dial or every dial in a room (admin-only)."""
         await _require_admin(call)
         device_id = call.data.get("device_id")
         theme = call.data.get("theme")
@@ -775,22 +891,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="invalid_theme",
             )
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "push_theme: could not resolve device_id %s to a dial", device_id
+                "push_theme: could not resolve device_id %s to any dial(s)", device_id
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
-        topic = TOPIC_CMD_THEME.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, json.dumps({"id": theme}))
-        _LOGGER.info("Pushed theme '%s' to %s", theme, dial_id)
+        body = json.dumps({"id": theme})
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_THEME.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "Pushed theme '%s' to %d dial(s): %s",
+            theme, len(targets), ", ".join(d for d, _ in targets),
+        )
 
     async def _send_announcement(call) -> None:
-        """Send an announcement to a dial (admin-only)."""
+        """Send an announcement to a dial or whole room (admin-only)."""
         await _require_admin(call)
         device_id = call.data.get("device_id")
         message = call.data.get("message")
@@ -803,19 +923,17 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="empty_message",
             )
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "send_announcement: could not resolve device_id %s to a dial",
+                "send_announcement: could not resolve device_id %s to any dial(s)",
                 device_id,
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
-        topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
-        payload = {
+        payload: dict[str, Any] = {
             "message": message,
             "from": from_name,
             "duration_s": duration,
@@ -826,10 +944,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # the active theme set as its notification animation.
         if isinstance(animation, str) and animation and animation != "none":
             payload["animation"] = animation
-        await mqtt.async_publish(hass, topic, json.dumps(payload))
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
         _LOGGER.info(
-            "Sent announcement to %s: %s (animation=%s)",
-            dial_id, message, animation,
+            "Sent announcement to %d dial(s): %s (animation=%s)",
+            len(targets), message, animation,
         )
 
     async def _send_countdown(call) -> None:
@@ -871,18 +992,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         else:
             raise ServiceValidationError("target_datetime is required")
 
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "send_countdown: could not resolve device_id %s to a dial",
+                "send_countdown: could not resolve device_id %s to any dial(s)",
                 device_id,
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
-        topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
 
         # Total visible duration on the dial = countdown phase + a 30s
         # celebration tail. Plenty of headroom for the fireworks.
@@ -901,10 +1020,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if isinstance(celebration_theme, str) and celebration_theme.strip():
             payload["celebration_theme_id"] = celebration_theme.strip()
 
-        await mqtt.async_publish(hass, topic, json.dumps(payload))
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
         _LOGGER.info(
-            "Sent countdown to %s: target=%s celeb=%r anim=%s theme=%r",
-            dial_id,
+            "Sent countdown to %d dial(s): target=%s celeb=%r anim=%s theme=%r",
+            len(targets),
             target_epoch,
             celebration_message,
             celebration_animation,
@@ -913,51 +1035,24 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
     async def _apply_overlay(call) -> None:
         await _require_admin(call)
-        """Apply a partial-theme overlay to a dial.
+        """Apply a transient atmosphere overlay to a dial or room.
 
-        Unlike push_theme, this does NOT replace the dial's current
-        theme — it merges a handful of fields (subtitle, home face,
-        brightness, etc.) on top of whatever theme is running. Useful
-        for short-lived weather / sensor / doorbell state flashes.
+        Atmosphere-only (brightness, transient subtitle flash, label
+        visibility, TTL). Face-shaping moved to ``mount_face`` / the
+        per-kind mount services after the 2026-05-11 Theme/Face split.
         """
         device_id = call.data.get("device_id")
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "apply_overlay: could not resolve device_id %s to a dial", device_id
+                "apply_overlay: could not resolve device_id %s to any dial(s)", device_id
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
 
         payload: dict[str, Any] = {}
-
-        subtitle_mode = call.data.get("subtitle_mode")
-        subtitle_text = call.data.get("subtitle_text")
-        if subtitle_mode is not None:
-            if subtitle_mode not in _OVERLAY_SUBTITLE_MODES:
-                raise ServiceValidationError(
-                    f"subtitle_mode must be one of {sorted(_OVERLAY_SUBTITLE_MODES)}"
-                )
-            payload["subtitle_mode"] = subtitle_mode
-        elif isinstance(subtitle_text, str) and subtitle_text.strip():
-            # User supplied subtitle_text but didn't pick a mode. Without
-            # subtitle_mode=custom the firmware happily stores the text
-            # but never displays it (theme default mode wins) — auto-flip
-            # it so "type subtitle, see subtitle" is the obvious UX.
-            payload["subtitle_mode"] = "custom"
-
-        home_face = call.data.get("home_face")
-        if home_face is not None:
-            if home_face not in _OVERLAY_HOME_FACES:
-                raise ServiceValidationError(
-                    f"home_face must be one of {sorted(_OVERLAY_HOME_FACES)}"
-                )
-            payload["home_face"] = home_face
-            # Legacy alias for older firmware that still reads home_mode.
-            payload["home_mode"] = home_face
 
         for key in _OVERLAY_STRING_FIELDS:
             val = call.data.get(key)
@@ -996,89 +1091,14 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 "apply_overlay requires at least one field to be set"
             )
 
-        # Multi-sensor block: quadrant slots 2-4 + marquee. Slot 1 is the
-        # legacy sensor_entity_id/sensor_label pair handled above; we fold
-        # it into the quad list here so the firmware's `sensors` parser
-        # owns all four slots in one place.
-        quad_entries: list[dict[str, Any]] = []
-        slot1_eid = call.data.get("sensor_entity_id")
-        slot1_lbl = call.data.get("sensor_label") or ""
-        if isinstance(slot1_eid, str) and slot1_eid.strip():
-            quad_entries.append({
-                "slot": 1,
-                "entity_id": slot1_eid.strip(),
-                "label": str(slot1_lbl)[:32],
-            })
-        for slot in _OVERLAY_QUAD_SLOTS:
-            eid = call.data.get(f"sensor_quad_{slot}_entity_id")
-            if not isinstance(eid, str) or not eid.strip():
-                continue
-            lbl = call.data.get(f"sensor_quad_{slot}_label") or ""
-            quad_entries.append({
-                "slot": slot,
-                "entity_id": eid.strip(),
-                "label": str(lbl)[:32],
-            })
-
-        marquee_entries: list[dict[str, Any]] = []
-        marquee_raw = call.data.get("sensor_marquee")
-        if isinstance(marquee_raw, list):
-            for item in marquee_raw[:12]:
-                if isinstance(item, str) and item.strip():
-                    marquee_entries.append({"entity_id": item.strip(), "label": "", "unit": ""})
-                elif isinstance(item, dict):
-                    eid = (item.get("entity_id") or "").strip()
-                    if not eid:
-                        continue
-                    marquee_entries.append({
-                        "entity_id": eid,
-                        "label": str(item.get("label") or "")[:24],
-                        "unit": str(item.get("unit") or "")[:8],
-                    })
-
-        marquee_position = call.data.get("marquee_position")
-        if marquee_position is not None and marquee_position not in _OVERLAY_MARQUEE_POSITIONS:
-            raise ServiceValidationError(
-                f"marquee_position must be one of {sorted(_OVERLAY_MARQUEE_POSITIONS)}"
-            )
-
-        if quad_entries or marquee_entries or marquee_position:
-            sensors_block: dict[str, Any] = {}
-            if quad_entries:
-                sensors_block["quad"] = quad_entries
-            if marquee_entries:
-                sensors_block["marquee"] = marquee_entries
-            if marquee_position:
-                sensors_block["marquee_position"] = marquee_position
-            payload["sensors"] = sensors_block
-            # Slot 1 was originally pushed via sensor_entity_id/sensor_label
-            # at the top level; the firmware's sensors-block path is a
-            # superset, so drop the legacy fields if they're present (the
-            # multi-block parser will set them via slot 1).
-            payload.pop("sensor_entity_id", None)
-            payload.pop("sensor_label", None)
-
-        topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, json.dumps(payload))
-        _LOGGER.info("Applied overlay to %s: %s", dial_id, sorted(payload.keys()))
-
-        # Push live values + register listeners for every entity the dial
-        # will display (legacy slot 1, quad 2-4, marquee). cmd/overlay only
-        # carries the entity_id; the firmware never reaches into HA on its
-        # own. Same auto-push + state-change-listener pattern that already
-        # makes slot 1 work for the sensor face.
-        bound_entities: list[tuple[str, str]] = []
-        for q in quad_entries:
-            bound_entities.append((q["entity_id"], q.get("label") or ""))
-        for m in marquee_entries:
-            bound_entities.append((m["entity_id"], m.get("label") or ""))
-
-        for eid, lbl in bound_entities:
-            await _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
-        if bound_entities:
-            _bind_sensors_to_dial(
-                hass, entry, dial_id, team_id, bound_entities,
-            )
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "Applied overlay to %d dial(s): %s",
+            len(targets), sorted(payload.keys()),
+        )
 
     async def _update_now_playing(call) -> None:
         await _require_admin(call)
@@ -1091,8 +1111,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         change.
         """
         device_id = call.data.get("device_id")
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
                 "update_now_playing: could not resolve device_id %s", device_id
             )
@@ -1100,7 +1120,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
 
         title = call.data.get("title", "")
         if title is None:
@@ -1121,9 +1140,14 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if art:
             payload["album_art_url"] = str(art)[:256]
 
-        topic = TOPIC_CMD_NOW_PLAYING.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, json.dumps(payload))
-        _LOGGER.debug("Now-playing -> %s: %s", dial_id, payload.get("title"))
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_NOW_PLAYING.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.debug(
+            "Now-playing -> %d dial(s): %s",
+            len(targets), payload.get("title"),
+        )
 
     async def _update_from_media_player(call) -> None:
         await _require_admin(call)
@@ -1145,8 +1169,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 f"entity_id must be a media_player (got {entity_id})"
             )
 
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
                 "update_from_media_player: could not resolve device_id %s",
                 device_id,
@@ -1155,7 +1179,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
 
         payload = _extract_now_playing(hass, entity_id)
         if payload is None:
@@ -1163,14 +1186,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 f"Unknown entity_id '{entity_id}' — is it loaded?"
             )
 
+        for dial_id, team_id in targets:
+            await _publish_now_playing(hass, entry, dial_id, team_id, payload)
         _LOGGER.info(
-            "update_from_media_player: %s -> %s (title=%r, playing=%s)",
+            "update_from_media_player: %s -> %d dial(s) (title=%r, playing=%s)",
             entity_id,
-            dial_id,
+            len(targets),
             payload.get("title", ""),
             payload.get("is_playing", False),
         )
-        await _publish_now_playing(hass, entry, dial_id, team_id, payload)
 
     async def _update_sensor_value(call) -> None:
         await _require_admin(call)
@@ -1181,8 +1205,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         buffered until the sensor face next activates.
         """
         device_id = call.data.get("device_id")
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
                 "update_sensor_value: could not resolve device_id %s", device_id
             )
@@ -1190,7 +1214,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
 
         entity_id = call.data.get("entity_id", "")
         if not entity_id:
@@ -1205,7 +1228,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             "entity_id": str(entity_id)[:128],
             "label": str(call.data.get("label") or "")[:64],
             "value": _format_sensor_value(value),
-            "unit": str(call.data.get("unit") or "")[:8],
+            "unit": _safe_unit_for_dial(str(call.data.get("unit") or ""))[:8],
         }
         icon = call.data.get("icon")
         if icon:
@@ -1214,27 +1237,35 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if color:
             payload["color"] = str(color)[:7]
 
-        topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, json.dumps(payload))
-        _LOGGER.debug("Sensor-value -> %s: %s=%s", dial_id, entity_id, value)
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.debug(
+            "Sensor-value -> %d dial(s): %s=%s",
+            len(targets), entity_id, value,
+        )
 
     async def _reboot(call) -> None:
-        """Reboot a dial (admin-only)."""
+        """Reboot a dial or every dial in a room (admin-only)."""
         await _require_admin(call)
         device_id = call.data.get("device_id")
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "reboot: could not resolve device_id %s to a dial", device_id
+                "reboot: could not resolve device_id %s to any dial(s)", device_id
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
-        topic = TOPIC_CMD_REBOOT.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, "{}")
-        _LOGGER.info("Sent reboot command to %s", dial_id)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_REBOOT.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, "{}")
+        _LOGGER.info(
+            "Sent reboot command to %d dial(s): %s",
+            len(targets), ", ".join(d for d, _ in targets),
+        )
 
     async def _set_timezone(call) -> None:
         await _require_admin(call)
@@ -1256,19 +1287,292 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 f"Unsupported timezone '{iana}'. Pick one from the dropdown."
             )
 
-        resolved = _resolve_dial(hass, device_id)
-        if not resolved:
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
             _LOGGER.warning(
-                "set_timezone: could not resolve device_id %s to a dial", device_id
+                "set_timezone: could not resolve device_id %s to any dial(s)", device_id
             )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        dial_id, team_id = resolved
-        topic = TOPIC_CMD_CONFIG.format(team_id=team_id, dial_id=dial_id)
-        await mqtt.async_publish(hass, topic, json.dumps({"tz": posix}))
-        _LOGGER.info("Set timezone for %s: %s (%s)", dial_id, iana, posix)
+        body = json.dumps({"tz": posix})
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_CONFIG.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "Set timezone for %d dial(s): %s (%s)",
+            len(targets), iana, posix,
+        )
+
+    # ── Phase 6 dial-platform — face dispatch ────────────────────────
+    # Faces are functional UI layers. Themes paint atmosphere, faces
+    # paint the room's actual signal layer (perimeter ring, ritual
+    # walkthrough, future room-aware widgets). Mount-side services
+    # publish retained so the dial restores the face on reboot;
+    # state-side services publish ephemeral (event-style traffic).
+
+    def _normalise_color(value: Any) -> str | None:
+        """Pass through hex color strings like '#RRGGBB' or 'RRGGBB'."""
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            return None
+        v = value.strip().lstrip("#")
+        if len(v) not in (6, 8) or not all(c in "0123456789abcdefABCDEF" for c in v):
+            return None
+        return "#" + v
+
+    def _build_perimeter_binding(raw: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate and shape one binding dict for the firmware schema."""
+        if not isinstance(raw, dict):
+            return None
+        bid = raw.get("id")
+        if not isinstance(bid, str) or not bid.strip():
+            return None
+        out: dict[str, Any] = {
+            "id": bid.strip(),
+            "friendly_name": str(raw.get("friendly_name", bid)),
+            "angular_center": float(raw.get("angular_center", 0.0)),
+        }
+        if "angular_width" in raw:
+            out["angular_width"] = float(raw["angular_width"])
+        treatment = raw.get("treatment", "state_color")
+        if treatment not in PERIMETER_TREATMENTS:
+            _LOGGER.warning(
+                "perimeter binding %s: unknown treatment '%s', using state_color",
+                bid, treatment,
+            )
+            treatment = "state_color"
+        out["treatment"] = treatment
+        if "state" in raw:
+            out["state"] = str(raw["state"])
+        if "active_state" in raw:
+            out["active_state"] = str(raw["active_state"])
+        bc = _normalise_color(raw.get("base_color"))
+        ac = _normalise_color(raw.get("active_color"))
+        if bc:
+            out["base_color"] = bc
+        if ac:
+            out["active_color"] = ac
+        if "value" in raw and raw["value"] is not None:
+            try:
+                out["value"] = float(raw["value"])
+            except (TypeError, ValueError):
+                pass
+        if "opacity" in raw and raw["opacity"] is not None:
+            try:
+                op = float(raw["opacity"])
+                if 0.0 <= op <= 1.0:
+                    out["opacity"] = op
+            except (TypeError, ValueError):
+                pass
+        return out
+
+    async def _publish_face_mount(
+        face_id: str, payload: dict[str, Any], targets: list, retained: bool = True
+    ) -> None:
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_FACE_MOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
+            )
+            await mqtt.async_publish(hass, topic, body, retain=retained)
+
+    async def _mount_perimeter_pulse(call) -> None:
+        """Mount Perimeter Pulse with structured bindings + appearance."""
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        raw_bindings = call.data.get("bindings") or []
+        if not isinstance(raw_bindings, list) or not raw_bindings:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_bindings",
+            )
+        bindings = []
+        for entry in raw_bindings:
+            shaped = _build_perimeter_binding(entry)
+            if shaped:
+                bindings.append(shaped)
+        if not bindings:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_bindings",
+            )
+
+        payload: dict[str, Any] = {
+            "face_id": "perimeter_pulse",
+            "schema_version": 1,
+            "bindings": bindings,
+        }
+        for src, dst in (
+            ("subtitle_text", "subtitle_text"),
+            ("paired_face_kind", "paired_face_kind"),
+            ("contiguous", "contiguous"),
+            ("bar_thickness", "bar_thickness"),
+            ("bar_opacity", "bar_opacity"),
+        ):
+            if src in call.data and call.data[src] not in (None, ""):
+                payload[dst] = call.data[src]
+
+        await _publish_face_mount("perimeter_pulse", payload, targets, retained=True)
+        _LOGGER.info(
+            "mount_perimeter_pulse: %d binding(s) → %d dial(s)",
+            len(bindings), len(targets),
+        )
+
+    async def _update_perimeter_state(call) -> None:
+        """Push state updates for one or more Perimeter Pulse bindings."""
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        raw_states = call.data.get("states") or []
+        if not isinstance(raw_states, list) or not raw_states:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_states",
+            )
+
+        clean_states = []
+        for entry in raw_states:
+            if not isinstance(entry, dict):
+                continue
+            sid = entry.get("id")
+            if not isinstance(sid, str) or not sid.strip():
+                continue
+            row: dict[str, Any] = {"id": sid.strip()}
+            if "state" in entry and entry["state"] is not None:
+                row["state"] = str(entry["state"])
+            if "value" in entry and entry["value"] is not None:
+                try:
+                    row["value"] = float(entry["value"])
+                except (TypeError, ValueError):
+                    pass
+            if entry.get("event"):
+                row["event"] = True
+            if len(row) > 1:  # has more than just "id"
+                clean_states.append(row)
+        if not clean_states:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_states",
+            )
+
+        body = json.dumps({"states": clean_states})
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_FACE_STATE.format(
+                team_id=team_id, dial_id=dial_id, face_id="perimeter_pulse",
+            )
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        _LOGGER.info(
+            "update_perimeter_state: %d update(s) → %d dial(s)",
+            len(clean_states), len(targets),
+        )
+
+    async def _mount_night_watch(call) -> None:
+        """Mount the Night Watch ritual face with a configured sequence."""
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        raw_seq = call.data.get("sequence") or []
+        if not isinstance(raw_seq, list) or not raw_seq:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_sequence",
+            )
+        sequence = []
+        valid_actions = ("lock", "close", "acknowledge", "arm_night")
+        for entry in raw_seq:
+            if not isinstance(entry, dict):
+                continue
+            sid = entry.get("id")
+            if not isinstance(sid, str) or not sid.strip():
+                continue
+            action = entry.get("action", "lock")
+            if action not in valid_actions:
+                action = "lock"
+            sequence.append({
+                "id": sid.strip(),
+                "ha_entity": str(entry.get("ha_entity", "")),
+                "friendly_name": str(entry.get("friendly_name", sid)),
+                "action": action,
+                "current_state": str(entry.get("current_state", "")),
+            })
+        if not sequence:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_sequence",
+            )
+
+        payload: dict[str, Any] = {
+            "face_id": "night_watch",
+            "schema_version": 1,
+            "sequence": sequence,
+            "closing_dwell_s": int(call.data.get("closing_dwell_s") or 6),
+        }
+        arm = call.data.get("arm_flag_entity")
+        if isinstance(arm, str) and arm.strip():
+            payload["arm_flag_entity"] = arm.strip()
+
+        await _publish_face_mount("night_watch", payload, targets, retained=False)
+        _LOGGER.info(
+            "mount_night_watch: %d step(s) → %d dial(s)",
+            len(sequence), len(targets),
+        )
+
+    async def _mount_face(call) -> None:
+        """Generic mount — escape hatch for forward-compat with new faces."""
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        face_id = call.data.get("face_id")
+        if not isinstance(face_id, str) or not face_id.strip():
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_face_id",
+            )
+        face_id = face_id.strip()
+        payload = call.data.get("payload") or {}
+        if not isinstance(payload, dict):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        # Stamp face_id and schema_version into the payload if the caller
+        # didn't supply them — the firmware tolerates either shape.
+        payload.setdefault("face_id", face_id)
+        payload.setdefault("schema_version", 1)
+        retained = bool(call.data.get("retained", True))
+        await _publish_face_mount(face_id, payload, targets, retained=retained)
+        _LOGGER.info(
+            "mount_face: %s → %d dial(s) (retained=%s)",
+            face_id, len(targets), retained,
+        )
 
     # Only register once
     if not hass.services.has_service(DOMAIN, "push_theme"):
@@ -1291,6 +1595,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "update_sensor_value", _update_sensor_value)
     if not hass.services.has_service(DOMAIN, "set_timezone"):
         hass.services.async_register(DOMAIN, "set_timezone", _set_timezone)
+    if not hass.services.has_service(DOMAIN, "mount_perimeter_pulse"):
+        hass.services.async_register(
+            DOMAIN, "mount_perimeter_pulse", _mount_perimeter_pulse
+        )
+    if not hass.services.has_service(DOMAIN, "update_perimeter_state"):
+        hass.services.async_register(
+            DOMAIN, "update_perimeter_state", _update_perimeter_state
+        )
+    if not hass.services.has_service(DOMAIN, "mount_night_watch"):
+        hass.services.async_register(DOMAIN, "mount_night_watch", _mount_night_watch)
+    if not hass.services.has_service(DOMAIN, "mount_face"):
+        hass.services.async_register(DOMAIN, "mount_face", _mount_face)
 
 
 def _resolve_dial(
@@ -1301,6 +1617,12 @@ def _resolve_dial(
     Looks up the device in the registry, finds its owning config entry,
     and reads the team_id from that entry so services work correctly across
     multiple Deckhand config entries (multi-team setups).
+
+    Group devices (identifier prefix ``group:``) are NOT handled here —
+    callers that should fan out across a room use :func:`_resolve_targets`
+    instead. This function only returns a single (dial_id, team_id) for
+    bare-dial identifiers and is kept for the few code paths
+    (media_player binding resolution) that genuinely point at one dial.
     """
     if not device_id:
         return None
@@ -1312,6 +1634,10 @@ def _resolve_dial(
     dial_id: str | None = None
     for domain, identifier in device.identifiers:
         if domain == DOMAIN:
+            # Skip group identifiers — they're a fan-out scope, not a
+            # single dial. The caller should be using _resolve_targets.
+            if identifier.startswith("group:"):
+                continue
             dial_id = identifier
             break
     if not dial_id:
@@ -1325,3 +1651,74 @@ def _resolve_dial(
         if team_id:
             return dial_id, str(team_id)
     return None
+
+
+def _resolve_targets(
+    hass: HomeAssistant, device_id: str | None
+) -> list[tuple[str, str]]:
+    """Resolve an HA device ID to one or more (dial_id, team_id) targets.
+
+    The HACS device selector accepts both individual dials and Rooms
+    (DialGroup) registered via the retained ``groups/list`` topic.
+    Service handlers want to fire one publish per dial regardless of
+    which kind the user picked, so this helper normalises both cases:
+
+    * Bare dial identifier (no ``group:`` prefix) → list with a single
+      tuple, exactly like :func:`_resolve_dial` returned previously.
+    * Group identifier (``group:{id}``) → list of every member dial
+      drawn from the cached groups dict the MQTT subscriber populates.
+
+    Empty list if the device is unknown, points at a missing room, or
+    points at a room with no member dials. The handler can branch on
+    that to raise ServiceValidationError so HA shows a meaningful error
+    rather than silently no-op'ing.
+    """
+    if not device_id:
+        return []
+    registry = dr.async_get(hass)
+    device = registry.async_get(device_id)
+    if not device:
+        return []
+
+    # Walk the identifiers — a single device should only have one
+    # Deckhand identifier in practice, but be defensive.
+    identifier: str | None = None
+    for domain, ident in device.identifiers:
+        if domain == DOMAIN:
+            identifier = ident
+            break
+    if not identifier:
+        return []
+
+    # Resolve owning team from the device's config entry. Both bare
+    # dials and rooms are owned by exactly one Deckhand entry.
+    team_id: str | None = None
+    entry_id_owner: str | None = None
+    for entry_id in device.config_entries:
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN:
+            continue
+        team_id = entry.data.get(CONF_TEAM_ID)
+        if team_id:
+            entry_id_owner = entry_id
+            break
+    if not team_id or not entry_id_owner:
+        return []
+    team_id = str(team_id)
+
+    if identifier.startswith("group:"):
+        gid = identifier[len("group:"):]
+        store = hass.data.get(DOMAIN, {}).get(entry_id_owner, {})
+        group = (store.get("groups") or {}).get(gid)
+        if not group:
+            _LOGGER.warning(
+                "Group %s not in cached groups list for entry %s — "
+                "Helm hasn't published the catalog yet, or the group "
+                "was deleted server-side", gid, entry_id_owner,
+            )
+            return []
+        dial_ids = group.get("dial_ids") or []
+        return [(d, team_id) for d in dial_ids if d]
+
+    # Bare dial identifier — single-target fan-out.
+    return [(identifier, team_id)]

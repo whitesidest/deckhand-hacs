@@ -584,9 +584,11 @@ set_timezone:
 apply_overlay:
   name: Apply Overlay
   description: >
-    Apply a partial theme overlay to a dial without replacing the current
-    theme. Handy for reactive automations — e.g. "flash Lightning subtitle
-    when WeatherFlow detects nearby strikes". Any field left unset keeps
+    Apply a transient atmosphere overlay to a dial without replacing the
+    current theme — handy for reactive automations like a brightness
+    bump on motion. Face-shaping (sensor bindings, weather entity,
+    message text, subtitle) lives on Face records now; use mount_face
+    or the per-kind mount services instead. Any field left unset keeps
     the dial's current value.
   fields:
     device_id:
@@ -596,113 +598,15 @@ apply_overlay:
       selector:
         device:
           integration: deckhand
-    subtitle_mode:
-      name: Subtitle mode
-      description: theme | custom | date | date_year | none
-      example: "custom"
-      selector:
-        select:
-          options:
-            - "theme"
-            - "custom"
-            - "date"
-            - "date_year"
-            - "none"
     subtitle_text:
       name: Subtitle text
       description: >
-        Custom text under the clock. Setting this without picking a
-        subtitle_mode automatically switches the dial to "custom" so the
-        text appears.
+        Transient subtitle flash under the clock. Use for short-lived
+        notifications (e.g. "⚡ Lightning"). Persistent subtitle modes
+        live on the Clock Face — edit there for "always-on" subtitles.
       example: "⚡ Lightning detected"
       selector:
         text:
-    home_face:
-      name: Home face
-      description: theme | clock | message | sensor | image | blank
-      example: "message"
-      selector:
-        select:
-          options:
-            - "theme"
-            - "clock"
-            - "message"
-            - "sensor"
-            - "image"
-            - "blank"
-    home_message:
-      name: Home message
-      description: Large message shown when home_face is "message".
-      example: "Storm warning"
-      selector:
-        text:
-    sensor_entity_id:
-      name: Sensor entity ID
-      description: >
-        HA entity to display when home_face is "sensor". The integration
-        publishes the entity's current value automatically, then keeps
-        the dial in sync as the value changes.
-      example: "sensor.living_room_temperature"
-      selector:
-        entity:
-    sensor_label:
-      name: Sensor label
-      description: Display label for the sensor face (slot 1).
-      example: "Living Room"
-      selector:
-        text:
-    sensor_quad_2_entity_id:
-      name: Quad slot 2 entity
-      description: HA entity for the second quadrant of the sensor face.
-      selector:
-        entity:
-    sensor_quad_2_label:
-      name: Quad slot 2 label
-      selector:
-        text:
-    sensor_quad_3_entity_id:
-      name: Quad slot 3 entity
-      description: HA entity for the third quadrant of the sensor face.
-      selector:
-        entity:
-    sensor_quad_3_label:
-      name: Quad slot 3 label
-      selector:
-        text:
-    sensor_quad_4_entity_id:
-      name: Quad slot 4 entity
-      description: HA entity for the fourth quadrant of the sensor face.
-      selector:
-        entity:
-    sensor_quad_4_label:
-      name: Quad slot 4 label
-      selector:
-        text:
-    sensor_marquee:
-      name: Marquee entities
-      description: >
-        Up to 12 sensors that scroll across the dial as a marquee.
-        Pass a YAML list of either bare entity ids
-        (e.g. `- sensor.outdoor_temp`) or per-entry objects
-        (`- entity_id: sensor.x` / `label: "..."` / `unit: "°F"`).
-      example: |
-        - sensor.outdoor_temp
-        - entity_id: sensor.living_humidity
-          label: "Humidity"
-        - entity_id: sensor.battery_pct
-          label: "Battery"
-          unit: "%"
-      selector:
-        object:
-    marquee_position:
-      name: Marquee position
-      description: Where the scrolling marquee renders on the dial face.
-      default: subtitle
-      selector:
-        select:
-          options:
-            - subtitle
-            - ring
     brightness:
       name: Brightness
       description: Display brightness override (0-100).
@@ -860,3 +764,219 @@ update_sensor_value:
       example: "#FFD700"
       selector:
         text:
+
+# ── Phase 6 dial-platform — face dispatch services ──────────────────────
+# Faces are functional UI layers (Perimeter Pulse, Night Watch, future
+# room-aware faces). Themes are atmosphere; faces are function. A face
+# is mounted onto a dial and either takes over the screen entirely
+# (FACE_OWNS_SCREEN) or paints a thin overlay on top of the active
+# theme (default — Perimeter Pulse uses this mode).
+
+mount_perimeter_pulse:
+  name: Mount Perimeter Pulse
+  description: >
+    Mount the Perimeter Pulse face on a dial. The bar wraps the rim of
+    the round display, with each binding owning an angular segment
+    rendered via a treatment (state_color / ripple / gradient / flash /
+    sweep). Retained — the dial re-mounts the same face on reboot.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial to mount the face on.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    bindings:
+      name: Bindings
+      description: >
+        Array of { id, friendly_name, angular_center, angular_width,
+        treatment, state, active_state, base_color, active_color, value,
+        opacity }. See documentation. Treatments: state_color (locks /
+        doors), ripple (motion / doorbell), gradient (continuous value),
+        flash (alarms), sweep (ambient zone).
+      required: true
+      example: |
+        - id: front_door
+          friendly_name: Front Door
+          angular_center: 0
+          angular_width: 24
+          treatment: state_color
+          active_state: unlocked
+          base_color: "#68C8D8"
+          active_color: "#E89858"
+        - id: living_motion
+          friendly_name: Living Room
+          angular_center: 90
+          angular_width: 30
+          treatment: ripple
+          active_state: "on"
+          base_color: "#3A4A5A"
+          active_color: "#9AC8E8"
+      selector:
+        object:
+    contiguous:
+      name: Contiguous Ring
+      description: >
+        When true, bindings sort by angular_center and each segment
+        extends to the midpoint with its neighbors — the whole rim is
+        owned. When false (default), each segment uses its own
+        angular_width with empty space in between.
+      default: false
+      selector:
+        boolean:
+    bar_thickness:
+      name: Bar Thickness
+      description: Bar width in pixels. Default 7. Range 1-40.
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 40
+          unit_of_measurement: px
+    bar_opacity:
+      name: Bar Opacity
+      description: >
+        Face-level opacity 0-1. 1 = clear-as-day (default), lower values
+        let the theme breathe through. Per-binding opacity overrides if
+        set on a binding.
+      default: 0.94
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    subtitle_text:
+      name: Subtitle
+      description: Text shown below the clock when calm.
+      example: "All Quiet"
+      selector:
+        text:
+    paired_face_kind:
+      name: Paired Face
+      description: >
+        Face id to mount on long-press. Defaults to night_watch — the
+        bedtime ritual.
+      default: night_watch
+      example: "night_watch"
+      selector:
+        text:
+
+update_perimeter_state:
+  name: Update Perimeter State
+  description: >
+    Push state for one or more Perimeter Pulse bindings. Use this from
+    HA automations: when a lock unlocks, when a motion sensor trips,
+    when a temperature changes. Set "event: true" to trigger ripple /
+    flash animation for that frame.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    states:
+      name: Bindings to update
+      description: >
+        Array of state updates. Each entry is { id, state, value, event }.
+        At minimum supply id and either state or value. Set event=true to
+        fire a ripple/flash pulse on the binding.
+      required: true
+      example: |
+        - id: front_door
+          state: unlocked
+        - id: living_motion
+          state: "on"
+          event: true
+        - id: living_temp
+          value: 0.62
+      selector:
+        object:
+
+mount_night_watch:
+  name: Mount Night Watch
+  description: >
+    Mount the Night Watch ritual face on a dial. Walks through a list
+    of locks/doors/windows step-by-step, each step is rotate-to-choose +
+    press-to-commit, ends in a constellation closing animation that
+    arms a configured boolean. Used as the paired face from Perimeter
+    Pulse long-press, but can be mounted directly too.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    sequence:
+      name: Sequence
+      description: >
+        Array of steps. Each step: { id, ha_entity, friendly_name,
+        action ("lock"/"close"/"acknowledge"/"arm_night"),
+        current_state }.
+      required: true
+      example: |
+        - id: front_door
+          ha_entity: lock.front_door
+          friendly_name: the front door
+          action: lock
+          current_state: unlocked
+        - id: alarm
+          ha_entity: input_boolean.night_watch_armed
+          friendly_name: the watch itself
+          action: arm_night
+          current_state: "off"
+      selector:
+        object:
+    closing_dwell_s:
+      name: Closing Dwell
+      description: How long the constellation closing animation plays.
+      default: 6
+      selector:
+        number:
+          min: 2
+          max: 30
+          unit_of_measurement: s
+    arm_flag_entity:
+      name: Arm Flag Entity
+      description: Optional input_boolean to flip on completion.
+      example: "input_boolean.night_watch_armed"
+      selector:
+        text:
+
+mount_face:
+  name: Mount Face (Generic)
+  description: >
+    Generic escape hatch — mount any registered face by id with a free-
+    form payload dict. Used for forward compatibility with faces the
+    HACS integration doesn't know about yet.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    face_id:
+      name: Face ID
+      description: Face identifier registered in firmware.
+      required: true
+      example: "perimeter_pulse"
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: Free-form dict — passed through to the face's on_mount.
+      required: true
+      example: |
+        subtitle_text: "Ready"
+        bindings: []
+      selector:
+        object:
+    retained:
+      name: Retain
+      description: When true, retained on the broker so the face survives reboot.
+      default: true
+      selector:
+        boolean:
