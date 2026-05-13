@@ -43,6 +43,9 @@ from .const import (
     TOPIC_CMD_THEME,
     TOPIC_STATUS,
 )
+from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
+    format_sensor_value as _format_sensor_value_tuple,
+)
 
 # IANA → POSIX TZ map. The firmware hands the value straight to
 # setenv("TZ", ...) which only understands POSIX, not IANA, so we have
@@ -90,9 +93,30 @@ _IANA_TO_POSIX = {
 # Face-shaping (sensor quads, weather entity, message body) moved off
 # the Theme model in the 2026-05-11 schema split and is published via
 # cmd/face/<kind>/mount (see ``mount_face``, ``mount_perimeter_pulse``,
-# ``mount_night_watch``). Subtitle mode + text are kept here because
-# subtitle is a transient atmosphere flash that the firmware merges
-# onto whichever face is currently mounted (see apply_display_overlay).
+# ``mount_night_watch``).
+#
+# NOTE — subtitle override is a leaky abstraction (deferred design call).
+# We frame ``subtitle_mode`` + ``subtitle_text`` as a "transient
+# atmosphere flash" here, but firmware's face_clock reads both fields
+# out of the clock face's own mount payload. So apply_overlay is
+# actually mutating per-face state, not a cross-face overlay slot:
+# the *next* clock-face mount (push from Helm, dial reboot, role swap)
+# will clobber whatever value we set here, and there's no per-overlay
+# TTL on the firmware side that survives a re-mount.
+#
+# Until this gets cleaned up, callers should treat apply_overlay's
+# subtitle as **best-effort and short-lived**. For a subtitle that
+# needs to outlive the next sync, mount a clock face with the
+# subtitle baked into its config payload via ``mount_face``.
+#
+# Future fix is one of:
+#   (a) Make subtitle a true cross-face overlay — firmware drops it
+#       from per-face globals and stores it in its own slot with its
+#       own TTL, OR
+#   (b) Remove subtitle from apply_overlay entirely and require
+#       operators to send a clock face mount with the desired
+#       subtitle in its payload.
+# See ``deckhand-firmware/src/face_clock.h`` for the firmware-side read.
 _OVERLAY_STRING_FIELDS = ("subtitle_text",)
 _OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
 
@@ -117,7 +141,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # Team's catalog of [{slug, name, is_system}] from the retained
         # `deckhand/{team_id}/themes/list` topic. Empty until the first
         # message arrives — the select entity falls back to
-        # DEFAULT_THEMES so the picker is never blank.
+        # FALLBACK_THEMES so the picker is never blank.
         "themes": [],
         # group_id (str of int) -> {id, slug, name, dial_ids: [...]} from
         # the retained `deckhand/{team_id}/groups/list` topic. Used by
@@ -254,8 +278,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
     # Subscribe to the team's published themes catalog. Helm + Console
     # republish this retained whenever a theme is created/edited/deleted
     # so HACS can offer a real per-dial picker that reflects the team's
-    # *custom* themes — not just the hardcoded system list shipped in
-    # services.yaml. Empty/missing topic falls back to DEFAULT_THEMES.
+    # *custom* themes. The service-yaml theme field is now a free-text
+    # selector — firmware validates the slug. Empty/missing topic falls
+    # back to FALLBACK_THEMES so the Select entity is never blank.
     themes_topic = f"deckhand/{team_id}/themes/list"
 
     @callback
@@ -621,51 +646,12 @@ async def _publish_now_playing(
     await mqtt.async_publish(hass, topic, json.dumps(payload))
 
 
-def _format_sensor_value(raw: Any) -> str:
-    """Trim sensor readings to something a 240x240 dial can display cleanly.
-
-    Home Assistant hands us string states like "21.3333333333334"; that's
-    unreadable on a 2.8cm glass circle. Round floats to 2 decimals, leave
-    integers alone (no trailing ".00" on a count), and pass non-numeric
-    strings through so statuses like "heating" or "home" render verbatim.
-    """
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    if not s:
-        return ""
-    try:
-        f = float(s)
-    except (TypeError, ValueError):
-        return s[:48]
-    if f.is_integer() and "." not in s and "e" not in s.lower():
-        return str(int(f))[:48]
-    return f"{f:.2f}"[:48]
-
-
-# Glyphs the LVGL Montserrat firmware font can't render — substitute to
-# ASCII before shipping the unit field on cmd/sensor_value. Mirrors the
-# table in helm/apps/devices/tasks.py:_DIAL_UNIT_GLYPH_MAP. Without this,
-# units like "μg/m³" land as tofu rectangles on the dial. Memory file
-# feedback_dial_font_ascii_only.md has the full rationale + glyph list.
-_DIAL_UNIT_GLYPH_MAP = {
-    "µ": "u",   # MICRO SIGN
-    "μ": "u",   # GREEK SMALL LETTER MU
-    "²": "2",
-    "³": "3",
-    "½": "1/2",
-    "¼": "1/4",
-    "¾": "3/4",
-    "°": "*",
-    " ": " ",   # thin space
-    " ": " ",   # narrow no-break space
-}
-
-
-def _safe_unit_for_dial(unit: str) -> str:
-    if not unit:
-        return ""
-    return "".join(_DIAL_UNIT_GLYPH_MAP.get(ch, ch) for ch in unit)
+# The previously-inline _format_sensor_value / _safe_unit_for_dial /
+# _DIAL_UNIT_GLYPH_MAP helpers now live in ._units (a vendored copy of
+# deckhand_sdk/deckhand/units.py). They're imported at the top of this
+# module under the same underscore-prefixed names. The canonical
+# format_sensor_value returns a ``(value, unit)`` tuple — see the two
+# call sites below for the new shape.
 
 
 def _build_sensor_value_payload(
@@ -677,12 +663,15 @@ def _build_sensor_value_payload(
         return None
     if state.state in (None, "", "unknown", "unavailable"):
         return None
-    unit = state.attributes.get("unit_of_measurement") or ""
+    value, unit = _format_sensor_value_tuple(state.state, state.attributes)
+    if value == "" and unit == "":
+        # Canonical formatter signals "skip this publish" via empty tuple.
+        return None
     payload: dict[str, Any] = {
         "entity_id": str(entity_id)[:128],
         "label": str(label or state.attributes.get("friendly_name") or "")[:64],
-        "value": _format_sensor_value(state.state),
-        "unit": _safe_unit_for_dial(str(unit))[:8],
+        "value": value[:48],
+        "unit": unit[:8],
     }
     return payload
 
@@ -957,7 +946,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _send_countdown(call) -> None:
-        await _require_admin(call)
         """Send a countdown announcement to a dial.
 
         Mirrors _send_announcement but layers in the countdown_to,
@@ -965,6 +953,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         celebration_theme_id fields the firmware reads to switch into
         countdown mode.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         target_dt = call.data.get("target_datetime")
         message = call.data.get("message", "Almost there...")
@@ -1037,13 +1026,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _apply_overlay(call) -> None:
-        await _require_admin(call)
         """Apply a transient atmosphere overlay to a dial or room.
 
         Atmosphere-only (brightness, transient subtitle flash, label
         visibility, TTL). Face-shaping moved to ``mount_face`` / the
         per-kind mount services after the 2026-05-11 Theme/Face split.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
         if not targets:
@@ -1059,13 +1048,28 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         subtitle_mode = call.data.get("subtitle_mode")
         subtitle_text = call.data.get("subtitle_text")
+        has_text = isinstance(subtitle_text, str) and bool(subtitle_text.strip())
         if subtitle_mode is not None:
             if subtitle_mode not in _OVERLAY_SUBTITLE_MODES:
                 raise ServiceValidationError(
                     f"subtitle_mode must be one of {sorted(_OVERLAY_SUBTITLE_MODES)}"
                 )
-            payload["subtitle_mode"] = subtitle_mode
-        elif isinstance(subtitle_text, str) and subtitle_text.strip():
+            # Conflict resolution: operator passed BOTH a non-empty
+            # ``subtitle_text`` AND a mode other than ``custom``. Without
+            # this auto-flip the firmware would honor the explicit mode
+            # (date / date_year / theme / none) and silently drop the
+            # text the user typed. Match the services.yaml promise:
+            # "type subtitle, see subtitle".
+            if has_text and subtitle_mode != "custom":
+                _LOGGER.info(
+                    "apply_overlay: subtitle_text provided with mode=%r — "
+                    "auto-flipping to 'custom' so the text is visible",
+                    subtitle_mode,
+                )
+                payload["subtitle_mode"] = "custom"
+            else:
+                payload["subtitle_mode"] = subtitle_mode
+        elif has_text:
             # Operator supplied subtitle_text without a mode. Without
             # subtitle_mode=custom the firmware stores the string but
             # never displays it (the active mode wins), so auto-flip
@@ -1120,7 +1124,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _update_now_playing(call) -> None:
-        await _require_admin(call)
         """Stream a now-playing update to a dial (cmd/now_playing).
 
         High-frequency ephemeral update. Empty title reverts to the theme-
@@ -1129,6 +1132,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         watch a media_player entity and fire an automation on attribute
         change.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
         if not targets:
@@ -1169,7 +1173,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _update_from_media_player(call) -> None:
-        await _require_admin(call)
         """Extract now-playing fields from a media_player entity and publish.
 
         Thin wrapper that reads the entity's current state + attributes,
@@ -1178,6 +1181,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         auto-push bindings configured in the options flow — same payload
         shape, no debounce.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         entity_id = call.data.get("entity_id")
         if not isinstance(entity_id, str) or not entity_id.strip():
@@ -1216,13 +1220,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _update_sensor_value(call) -> None:
-        await _require_admin(call)
         """Stream a sensor-value update to a dial (cmd/sensor_value).
 
         High-frequency ephemeral update. If the dial is currently on the
         sensor home face it refreshes in place; otherwise the value is
         buffered until the sensor face next activates.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
         if not targets:
@@ -1240,14 +1244,19 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         value = call.data.get("value", "")
         # Accept numbers or strings; publish as string so the dial's parser
-        # can render verbatim without locale issues. Float values get
-        # rounded to two decimals so template sensors that pass raw HA
-        # readings ("21.3333333333333") render cleanly on the dial.
+        # can render verbatim without locale issues. Float values are
+        # rounded to 1 decimal (canonical dial-display precision) so
+        # template sensors passing raw HA readings ("21.3333333333333")
+        # render cleanly. See deckhand_sdk.units.format_sensor_value.
+        raw_unit = str(call.data.get("unit") or "")
+        fmt_value, fmt_unit = _format_sensor_value_tuple(
+            value, {"unit_of_measurement": raw_unit}
+        )
         payload: dict[str, Any] = {
             "entity_id": str(entity_id)[:128],
             "label": str(call.data.get("label") or "")[:64],
-            "value": _format_sensor_value(value),
-            "unit": _safe_unit_for_dial(str(call.data.get("unit") or ""))[:8],
+            "value": fmt_value[:48],
+            "unit": fmt_unit[:8],
         }
         icon = call.data.get("icon")
         if icon:
@@ -1287,7 +1296,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _set_timezone(call) -> None:
-        await _require_admin(call)
         """Push a per-dial timezone via cmd/config.
 
         The firmware does ``setenv("TZ", value, 1); tzset()`` with whatever
@@ -1295,6 +1303,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         from our static map. Unknown zones are rejected loudly rather than
         silently shipping ``UTC0`` and confusing the user.
         """
+        await _require_admin(call)
         device_id = call.data.get("device_id")
         iana = call.data.get("timezone")
         if not isinstance(iana, str) or not iana.strip():

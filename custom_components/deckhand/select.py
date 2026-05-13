@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, DEFAULT_THEMES, TOPIC_CMD_THEME
+from .const import DOMAIN, FALLBACK_THEMES, TOPIC_CMD_THEME
 from .entity import DeckhandEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,7 +65,10 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         super().__init__(dial_id, data)
         self._entry = entry
         self._attr_unique_id = f"deckhand_{dial_id}_theme_select"
-        self._attr_options = list(DEFAULT_THEMES)
+        # First-boot seed: a tiny set of canonical Helm slugs. The real
+        # catalog gets swapped in from the retained ``themes/list`` topic
+        # in async_added_to_hass once self.hass is bound.
+        self._attr_options = list(FALLBACK_THEMES)
         current = data.get("current_theme")
         self._attr_current_option = (
             current if current in self._attr_options else self._attr_options[0]
@@ -74,7 +77,7 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
     def _options_from_store(self) -> list[str]:
         """Pull the current theme catalog out of the integration cache.
 
-        Falls back to ``DEFAULT_THEMES`` when the team hasn't published
+        Falls back to ``FALLBACK_THEMES`` when the team hasn't published
         a themes/list yet (e.g. fresh broker, no Helm/Console connected).
         Only safe to call once the entity has been added to HA — uses
         ``self.hass``.
@@ -82,7 +85,7 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         themes = store.get("themes") or []
         slugs = [t["slug"] for t in themes if isinstance(t, dict) and t.get("slug")]
-        return slugs or list(DEFAULT_THEMES)
+        return slugs or list(FALLBACK_THEMES)
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected theme — publishes MQTT command."""

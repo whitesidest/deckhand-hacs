@@ -12,182 +12,17 @@ push_theme:
     theme:
       name: Theme
       description: >
-        Pick a built-in theme, or type a custom slug (e.g. one you
-        created in Helm or Console).
+        Theme slug to push. Built-in slugs match the Helm seed (e.g.
+        ``elysian``, ``concierge``, ``nordic``, ``vault``, ``atelier``).
+        Custom slugs created in Helm or Console work too — firmware
+        validates the slug, and a slug it doesn't recognise is silently
+        ignored. The Theme **entity** in HA (one per dial) shows the
+        team's live theme catalog pulled from the retained
+        ``themes/list`` MQTT topic, so use that for picking by name.
       required: true
       example: "elysian"
       selector:
-        select:
-          mode: dropdown
-          custom_value: true
-          sort: false
-          options:
-            - value: elysian
-              label: Elysian
-            - value: concierge
-              label: Concierge
-            - value: hal9000
-              label: HAL 9000
-            - value: shogun
-              label: Shōgun
-            - value: royale
-              label: Royale
-            - value: cosmos
-              label: Cosmos
-            - value: starship
-              label: Starship
-            - value: nordic
-              label: Nordic Lodge
-            - value: aegis
-              label: Aegis
-            - value: vault
-              label: Vault-Tec
-            - value: quarterdeck
-              label: Quarterdeck
-            - value: polar
-              label: Polar
-            - value: ember
-              label: Ember
-            - value: ghost
-              label: Ghost
-            - value: lightning
-              label: Lightning
-            - value: steampunk
-              label: Steampunk
-            - value: agate
-              label: Agate
-            - value: rainy
-              label: Rainy Day
-            - value: porthole
-              label: Porthole
-            - value: tide
-              label: Tide
-            - value: seasons
-              label: Seasons
-            - value: obsidian
-              label: Obsidian
-            - value: dune
-              label: Dune
-            - value: reef
-              label: Reef
-            - value: onyx
-              label: Onyx
-            - value: champagne
-              label: Champagne
-            - value: monstera
-              label: Monstera
-            - value: synthwave
-              label: Synthwave
-            - value: tron
-              label: Tron
-            - value: radar
-              label: Radar
-            - value: frost
-              label: Frost
-            - value: arcanum
-              label: Arcanum
-            - value: zen
-              label: Zen
-            - value: warp
-              label: Warp
-            - value: lullaby
-              label: Lullaby
-            - value: jewel
-              label: Jewel
-            - value: lapis
-              label: Lapis
-            - value: kintsugi
-              label: Kintsugi
-            - value: malachite
-              label: Malachite
-            - value: carrara
-              label: Carrara
-            - value: geode
-              label: Geode
-            - value: canopy
-              label: Canopy
-            - value: passage
-              label: Passage
-            - value: fathom
-              label: Fathom
-            - value: eventide
-              label: Eventide
-            - value: mosaic
-              label: Mosaic
-            - value: gemstones
-              label: Gemstones
-            - value: lunar
-              label: Lunar
-            - value: crescent
-              label: Crescent
-            - value: diamond
-              label: Diamond
-            - value: discotheque
-              label: Discotheque
-            - value: aurelia
-              label: Aurelia
-            - value: auric
-              label: Auric
-            - value: orrery
-              label: Orrery
-            - value: barista
-              label: Barista
-            - value: arcade
-              label: Arcade
-            - value: firefly
-              label: Firefly
-            - value: bridgework
-              label: Bridgework
-            - value: reactor
-              label: Reactor
-            - value: wardroom
-              label: Wardroom
-            - value: aquarium
-              label: Aquarium
-            - value: pinball
-              label: Pinball
-            - value: lava_lamp
-              label: Lava Lamp
-            - value: beach_lounge
-              label: Beach Lounge
-            - value: pirate_bay
-              label: Pirate Bay
-            - value: yule
-              label: Yule
-            - value: halloween
-              label: Halloween
-            - value: valentine
-              label: Valentine
-            - value: lunar_ny
-              label: Lunar New Year
-            - value: diwali
-              label: Diwali
-            - value: fireplace
-              label: Fireplace
-            - value: bioluminescent
-              label: Bioluminescent
-            - value: koi
-              label: Koi Pond
-            - value: observatory
-              label: Observatory
-            - value: skyline
-              label: Skyline
-            - value: moonlit_wood
-              label: Moonlit Wood
-            - value: treasure_vault
-              label: Treasure Vault
-            - value: wardstone
-              label: Wardstone
-            - value: atelier
-              label: Atelier
-            - value: breath
-              label: Breath
-            - value: greenhouse
-              label: Greenhouse
-            - value: kelpcurrent
-              label: Kelpcurrent
-            - value: sakura
-              label: Sakura Dawn
+        text:
 
 send_announcement:
   name: Send Announcement
@@ -316,183 +151,13 @@ send_countdown:
     celebration_theme:
       name: Celebration Theme
       description: >
-        Optional theme to push at T=0. Leave blank to keep the dial's
-        current theme.
+        Optional theme slug to push at T=0. Leave blank to keep the
+        dial's current theme. Firmware validates the slug — unknown
+        slugs are silently ignored. Use the Theme entity (one per dial)
+        to discover what's currently in your team's catalog.
       example: "royale"
       selector:
-        select:
-          mode: dropdown
-          custom_value: true
-          sort: false
-          options:
-            - value: ""
-              label: "(keep current theme)"
-            - value: elysian
-              label: Elysian
-            - value: concierge
-              label: Concierge
-            - value: hal9000
-              label: HAL 9000
-            - value: shogun
-              label: Shōgun
-            - value: royale
-              label: Royale
-            - value: cosmos
-              label: Cosmos
-            - value: starship
-              label: Starship
-            - value: nordic
-              label: Nordic Lodge
-            - value: aegis
-              label: Aegis
-            - value: vault
-              label: Vault-Tec
-            - value: quarterdeck
-              label: Quarterdeck
-            - value: polar
-              label: Polar
-            - value: ember
-              label: Ember
-            - value: ghost
-              label: Ghost
-            - value: lightning
-              label: Lightning
-            - value: steampunk
-              label: Steampunk
-            - value: agate
-              label: Agate
-            - value: rainy
-              label: Rainy Day
-            - value: porthole
-              label: Porthole
-            - value: tide
-              label: Tide
-            - value: seasons
-              label: Seasons
-            - value: obsidian
-              label: Obsidian
-            - value: dune
-              label: Dune
-            - value: reef
-              label: Reef
-            - value: onyx
-              label: Onyx
-            - value: champagne
-              label: Champagne
-            - value: monstera
-              label: Monstera
-            - value: synthwave
-              label: Synthwave
-            - value: tron
-              label: Tron
-            - value: radar
-              label: Radar
-            - value: frost
-              label: Frost
-            - value: arcanum
-              label: Arcanum
-            - value: zen
-              label: Zen
-            - value: warp
-              label: Warp
-            - value: lullaby
-              label: Lullaby
-            - value: jewel
-              label: Jewel
-            - value: lapis
-              label: Lapis
-            - value: kintsugi
-              label: Kintsugi
-            - value: malachite
-              label: Malachite
-            - value: carrara
-              label: Carrara
-            - value: geode
-              label: Geode
-            - value: canopy
-              label: Canopy
-            - value: passage
-              label: Passage
-            - value: fathom
-              label: Fathom
-            - value: eventide
-              label: Eventide
-            - value: mosaic
-              label: Mosaic
-            - value: gemstones
-              label: Gemstones
-            - value: lunar
-              label: Lunar
-            - value: crescent
-              label: Crescent
-            - value: diamond
-              label: Diamond
-            - value: discotheque
-              label: Discotheque
-            - value: aurelia
-              label: Aurelia
-            - value: auric
-              label: Auric
-            - value: orrery
-              label: Orrery
-            - value: barista
-              label: Barista
-            - value: arcade
-              label: Arcade
-            - value: firefly
-              label: Firefly
-            - value: bridgework
-              label: Bridgework
-            - value: reactor
-              label: Reactor
-            - value: wardroom
-              label: Wardroom
-            - value: aquarium
-              label: Aquarium
-            - value: pinball
-              label: Pinball
-            - value: lava_lamp
-              label: Lava Lamp
-            - value: beach_lounge
-              label: Beach Lounge
-            - value: pirate_bay
-              label: Pirate Bay
-            - value: yule
-              label: Yule
-            - value: halloween
-              label: Halloween
-            - value: valentine
-              label: Valentine
-            - value: lunar_ny
-              label: Lunar New Year
-            - value: diwali
-              label: Diwali
-            - value: fireplace
-              label: Fireplace
-            - value: bioluminescent
-              label: Bioluminescent
-            - value: koi
-              label: Koi Pond
-            - value: observatory
-              label: Observatory
-            - value: skyline
-              label: Skyline
-            - value: moonlit_wood
-              label: Moonlit Wood
-            - value: treasure_vault
-              label: Treasure Vault
-            - value: wardstone
-              label: Wardstone
-            - value: atelier
-              label: Atelier
-            - value: breath
-              label: Breath
-            - value: greenhouse
-              label: Greenhouse
-            - value: kelpcurrent
-              label: Kelpcurrent
-            - value: sakura
-              label: Sakura Dawn
+        text:
     lead_seconds:
       name: Lead Time (seconds)
       description: How long before the target the countdown should start.
@@ -619,7 +284,16 @@ apply_overlay:
       description: >
         Transient subtitle flash under the clock. Use for short-lived
         notifications. Supplying text without picking a mode auto-flips
-        the dial into ``custom`` so the text is actually shown.
+        the dial into ``custom`` so the text is actually shown; passing
+        text together with a mode other than ``custom`` (e.g. ``date``)
+        also auto-flips to ``custom`` so the typed text wins.
+
+        Caveat: subtitle lives in the clock face's own mount payload on
+        the firmware side, so this override is **best-effort and
+        short-lived** — the next clock face mount (push from Helm,
+        reboot, etc.) clobbers it. For a subtitle that must persist,
+        send a clock face mount with the subtitle baked into the
+        payload instead of using apply_overlay.
       example: "Lightning detected"
       selector:
         text:

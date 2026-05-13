@@ -46,20 +46,21 @@ PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
 # heartbeat received within this window.
 HEARTBEAT_TIMEOUT = 120
 
-# Default theme list (built-in themes)
-DEFAULT_THEMES = [
+# First-boot fallback theme list. Used ONLY when the team's retained
+# ``deckhand/{team_id}/themes/list`` topic hasn't arrived yet (fresh
+# broker, Helm/Console not connected, etc.). These slugs MUST match the
+# canonical Helm seed at
+# ``helm/apps/themes/management/commands/seed_system_themes.py`` —
+# inventing labels here means the dial silently no-ops on theme push
+# because firmware can't match the slug. Keep this list tiny and add
+# new themes by relying on the dynamic ``themes/list`` topic instead.
+FALLBACK_THEMES = [
     "elysian",
     "concierge",
-    "meridian",
-    "shogun",
-    "royale",
-    "cosmos",
-    "terroir",
-    "nordic_lodge",
+    "nordic",
     "aegis",
-    "vault_tec",
+    "vault",
     "quarterdeck",
-    "polar",
     "ember",
     "ghost",
 ]
