@@ -249,12 +249,14 @@ set_timezone:
 apply_overlay:
   name: Apply Overlay
   description: >
-    Apply a transient atmosphere overlay to a dial without replacing the
-    current theme — handy for reactive automations like a brightness
-    bump on motion. Face-shaping (sensor bindings, weather entity,
-    message text, subtitle) lives on Face records now; use mount_face
-    or the per-kind mount services instead. Any field left unset keeps
-    the dial's current value.
+    Apply a transient runtime overlay to a dial without replacing the
+    saved theme or face. Use for reactive automations — "flash a sensor
+    quadrant face when air quality spikes", "bump brightness on motion",
+    "show a subtitle alert for 10 minutes". Distinct from
+    ``mount_face``: that one writes RETAINED face state that survives
+    reboot. ``apply_overlay`` is ephemeral by default; set ``ttl_s`` for
+    an auto-revert timer. Any field left unset keeps the dial's current
+    value.
   fields:
     device_id:
       name: Device
@@ -295,6 +297,120 @@ apply_overlay:
         send a clock face mount with the subtitle baked into the
         payload instead of using apply_overlay.
       example: "Lightning detected"
+      selector:
+        text:
+    home_face:
+      name: Home Face
+      description: >
+        Which face the dial home screen renders. ``clock`` is the
+        default; ``sensor`` enables the 1-4 quadrant readouts (see the
+        sensor_* fields below); ``message`` shows a big centered string
+        (see ``home_message``); ``weather`` /  ``energy`` /
+        ``framecast`` / ``volume`` / ``blank`` / ``image`` are their
+        dedicated faces. Persistent face state should be set via
+        ``mount_face``; this is the transient-flash variant.
+      example: "sensor"
+      selector:
+        select:
+          options:
+            - "theme"
+            - "clock"
+            - "message"
+            - "sensor"
+            - "image"
+            - "blank"
+            - "volume"
+            - "weather"
+            - "energy"
+            - "framecast"
+    home_message:
+      name: Home Message
+      description: Large message shown when ``home_face`` is ``message``.
+      example: "Storm warning"
+      selector:
+        text:
+    sensor_entity_id:
+      name: Sensor entity ID (slot 1)
+      description: >
+        HA entity to display when ``home_face`` is ``sensor``. The
+        integration publishes the entity's current value immediately and
+        keeps it in sync as it changes.
+      example: "sensor.living_room_temperature"
+      selector:
+        entity:
+    sensor_label:
+      name: Sensor label (slot 1)
+      description: Display label for the slot-1 sensor.
+      example: "Living"
+      selector:
+        text:
+    sensor_quad_2_entity_id:
+      name: Quad slot 2 entity
+      description: HA entity for the second quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_2_label:
+      name: Quad slot 2 label
+      selector:
+        text:
+    sensor_quad_3_entity_id:
+      name: Quad slot 3 entity
+      description: HA entity for the third quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_3_label:
+      name: Quad slot 3 label
+      selector:
+        text:
+    sensor_quad_4_entity_id:
+      name: Quad slot 4 entity
+      description: HA entity for the fourth quadrant of the sensor face.
+      selector:
+        entity:
+    sensor_quad_4_label:
+      name: Quad slot 4 label
+      selector:
+        text:
+    sensor_marquee:
+      name: Marquee entities
+      description: >
+        Up to 12 sensors that scroll across the dial as a marquee.
+        Pass a YAML list of either bare entity ids
+        (``- sensor.outdoor_temp``) or per-entry objects
+        (``- entity_id: sensor.x`` / ``label: "..."`` / ``unit: "F"``).
+      example: |
+        - sensor.outdoor_temp
+        - entity_id: sensor.living_humidity
+          label: Humidity
+        - entity_id: sensor.battery_pct
+          label: Battery
+          unit: "%"
+      selector:
+        object:
+    marquee_position:
+      name: Marquee position
+      description: Where the scrolling marquee renders on the dial face.
+      default: subtitle
+      selector:
+        select:
+          options:
+            - subtitle
+            - ring
+    weather_entity_id:
+      name: Weather entity ID
+      description: >
+        HA entity (``weather.*``) used when ``home_face`` is ``weather``.
+        The dial polls condition + temperature.
+      example: "weather.home"
+      selector:
+        entity:
+          domain: weather
+    framecast_frame_id:
+      name: FrameCast frame ID
+      description: >
+        Configured Samsung Frame TV UUID. Empty = "auto pick the only
+        Frame", which the server resolves before pushing cmd/framecast.
+      example: ""
       selector:
         text:
     brightness:

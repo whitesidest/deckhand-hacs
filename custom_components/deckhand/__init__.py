@@ -89,36 +89,33 @@ _IANA_TO_POSIX = {
     "UTC": "UTC0",
 }
 
-# Overlay field validation — apply_overlay is atmosphere-only now.
-# Face-shaping (sensor quads, weather entity, message body) moved off
-# the Theme model in the 2026-05-11 schema split and is published via
-# cmd/face/<kind>/mount (see ``mount_face``, ``mount_perimeter_pulse``,
-# ``mount_night_watch``).
+# apply_overlay is a TRANSIENT RUNTIME OVERRIDE — distinct from the
+# persistent Theme/Face state. The firmware's apply_display_overlay
+# handler (deckhand-firmware/src/main.cpp ~340) merges all of these
+# fields onto the live dial state without touching NVS. They survive
+# until the next cmd/theme or cmd/face/<kind>/mount push replaces them
+# (or until the optional ttl_s timer expires).
 #
-# NOTE — subtitle override is a leaky abstraction (deferred design call).
-# We frame ``subtitle_mode`` + ``subtitle_text`` as a "transient
-# atmosphere flash" here, but firmware's face_clock reads both fields
-# out of the clock face's own mount payload. So apply_overlay is
-# actually mutating per-face state, not a cross-face overlay slot:
-# the *next* clock-face mount (push from Helm, dial reboot, role swap)
-# will clobber whatever value we set here, and there's no per-overlay
-# TTL on the firmware side that survives a re-mount.
-#
-# Until this gets cleaned up, callers should treat apply_overlay's
-# subtitle as **best-effort and short-lived**. For a subtitle that
-# needs to outlive the next sync, mount a clock face with the
-# subtitle baked into its config payload via ``mount_face``.
-#
-# Future fix is one of:
-#   (a) Make subtitle a true cross-face overlay — firmware drops it
-#       from per-face globals and stores it in its own slot with its
-#       own TTL, OR
-#   (b) Remove subtitle from apply_overlay entirely and require
-#       operators to send a clock face mount with the desired
-#       subtitle in its payload.
-# See ``deckhand-firmware/src/face_clock.h`` for the firmware-side read.
-_OVERLAY_STRING_FIELDS = ("subtitle_text",)
+# Face-shaping fields are kept here because real automations need them
+# ("when air quality drops below X, flip Tyler into a 4-quad sensor
+# face for an hour"). For persistent face state, use ``mount_face`` /
+# ``mount_perimeter_pulse`` / ``mount_night_watch`` — those publish
+# retained cmd/face/<kind>/mount messages that survive reboots.
+_OVERLAY_STRING_FIELDS = (
+    "subtitle_text",
+    "home_message",
+    "sensor_entity_id",
+    "sensor_label",
+    "weather_entity_id",
+    "framecast_frame_id",
+)
 _OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
+_OVERLAY_HOME_FACES = {
+    "theme", "clock", "message", "sensor", "image", "blank",
+    "volume", "weather", "energy", "framecast",
+}
+_OVERLAY_QUAD_SLOTS = (2, 3, 4)
+_OVERLAY_MARQUEE_POSITIONS = {"subtitle", "ring"}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1026,11 +1023,14 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _apply_overlay(call) -> None:
-        """Apply a transient atmosphere overlay to a dial or room.
+        """Apply a transient runtime overlay to a dial or room.
 
-        Atmosphere-only (brightness, transient subtitle flash, label
-        visibility, TTL). Face-shaping moved to ``mount_face`` / the
-        per-kind mount services after the 2026-05-11 Theme/Face split.
+        Merges any subset of {subtitle, home_face, brightness, sensor
+        bindings, weather/framecast entity, message text, hide_label}
+        on top of the dial's current state. Distinct from
+        ``mount_face`` (which writes RETAINED face state that survives
+        reboot): this is the "flash a different face for an hour" path.
+        Set ``ttl_s`` for an auto-revert timer.
         """
         await _require_admin(call)
         device_id = call.data.get("device_id")
@@ -1054,28 +1054,30 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 raise ServiceValidationError(
                     f"subtitle_mode must be one of {sorted(_OVERLAY_SUBTITLE_MODES)}"
                 )
-            # Conflict resolution: operator passed BOTH a non-empty
-            # ``subtitle_text`` AND a mode other than ``custom``. Without
-            # this auto-flip the firmware would honor the explicit mode
-            # (date / date_year / theme / none) and silently drop the
-            # text the user typed. Match the services.yaml promise:
-            # "type subtitle, see subtitle".
             if has_text and subtitle_mode != "custom":
+                # Operator passed BOTH a non-empty text AND a non-custom
+                # mode. The firmware would honor the mode and drop the
+                # text; auto-flip so "type subtitle, see subtitle" works.
                 _LOGGER.info(
-                    "apply_overlay: subtitle_text provided with mode=%r — "
-                    "auto-flipping to 'custom' so the text is visible",
+                    "apply_overlay: subtitle_text with mode=%r — auto-flipping to 'custom'",
                     subtitle_mode,
                 )
                 payload["subtitle_mode"] = "custom"
             else:
                 payload["subtitle_mode"] = subtitle_mode
         elif has_text:
-            # Operator supplied subtitle_text without a mode. Without
-            # subtitle_mode=custom the firmware stores the string but
-            # never displays it (the active mode wins), so auto-flip
-            # to custom — "type subtitle, see subtitle" is the
-            # obvious UX.
             payload["subtitle_mode"] = "custom"
+
+        # home_face — selects which face renders on the dial home screen.
+        # Legacy alias ``home_mode`` kept for firmware <2.0 compatibility.
+        home_face = call.data.get("home_face")
+        if home_face is not None:
+            if home_face not in _OVERLAY_HOME_FACES:
+                raise ServiceValidationError(
+                    f"home_face must be one of {sorted(_OVERLAY_HOME_FACES)}"
+                )
+            payload["home_face"] = home_face
+            payload["home_mode"] = home_face
 
         for key in _OVERLAY_STRING_FIELDS:
             val = call.data.get(key)
@@ -1109,6 +1111,70 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             if t > 0:
                 payload["ttl_s"] = t
 
+        # Multi-sensor block: quad slots 2-4 + a scrolling marquee. Slot 1
+        # is the legacy ``sensor_entity_id`` / ``sensor_label`` pair above
+        # — we fold it into the same ``sensors.quad`` list the firmware
+        # parser expects so all four slots share one code path on the
+        # dial. ``sensor_marquee`` accepts either bare entity ids or
+        # per-entry dicts; both shapes normalize to the same list of
+        # {entity_id, label, unit} objects.
+        quad_entries: list[dict[str, Any]] = []
+        slot1_eid = call.data.get("sensor_entity_id")
+        slot1_lbl = call.data.get("sensor_label") or ""
+        if isinstance(slot1_eid, str) and slot1_eid.strip():
+            quad_entries.append({
+                "slot": 1,
+                "entity_id": slot1_eid.strip(),
+                "label": str(slot1_lbl)[:32],
+            })
+        for slot in _OVERLAY_QUAD_SLOTS:
+            eid = call.data.get(f"sensor_quad_{slot}_entity_id")
+            if not isinstance(eid, str) or not eid.strip():
+                continue
+            lbl = call.data.get(f"sensor_quad_{slot}_label") or ""
+            quad_entries.append({
+                "slot": slot,
+                "entity_id": eid.strip(),
+                "label": str(lbl)[:32],
+            })
+
+        marquee_entries: list[dict[str, Any]] = []
+        marquee_raw = call.data.get("sensor_marquee")
+        if isinstance(marquee_raw, list):
+            for item in marquee_raw[:12]:
+                if isinstance(item, str) and item.strip():
+                    marquee_entries.append({"entity_id": item.strip(), "label": "", "unit": ""})
+                elif isinstance(item, dict):
+                    eid = (item.get("entity_id") or "").strip()
+                    if not eid:
+                        continue
+                    marquee_entries.append({
+                        "entity_id": eid,
+                        "label": str(item.get("label") or "")[:24],
+                        "unit": str(item.get("unit") or "")[:8],
+                    })
+
+        marquee_position = call.data.get("marquee_position")
+        if marquee_position is not None and marquee_position not in _OVERLAY_MARQUEE_POSITIONS:
+            raise ServiceValidationError(
+                f"marquee_position must be one of {sorted(_OVERLAY_MARQUEE_POSITIONS)}"
+            )
+
+        if quad_entries or marquee_entries or marquee_position:
+            sensors_block: dict[str, Any] = {}
+            if quad_entries:
+                sensors_block["quad"] = quad_entries
+            if marquee_entries:
+                sensors_block["marquee"] = marquee_entries
+            if marquee_position:
+                sensors_block["marquee_position"] = marquee_position
+            payload["sensors"] = sensors_block
+            # Slot 1 was packed into ``sensors.quad`` above; drop the
+            # top-level legacy fields so the firmware reads only one
+            # source-of-truth.
+            payload.pop("sensor_entity_id", None)
+            payload.pop("sensor_label", None)
+
         if not payload:
             raise ServiceValidationError(
                 "apply_overlay requires at least one field to be set"
@@ -1122,6 +1188,25 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             "Applied overlay to %d dial(s): %s",
             len(targets), sorted(payload.keys()),
         )
+
+        # Push live values + register listeners for every entity the
+        # overlay just bound. ``cmd/overlay`` only carries entity ids;
+        # the firmware never reads from HA on its own. Per-dial fan-out
+        # so a room target wires up state-change listeners for every
+        # member dial.
+        bound_entities: list[tuple[str, str]] = []
+        for q in quad_entries:
+            bound_entities.append((q["entity_id"], q.get("label") or ""))
+        for m in marquee_entries:
+            bound_entities.append((m["entity_id"], m.get("label") or ""))
+
+        if bound_entities:
+            for dial_id, team_id in targets:
+                for eid, lbl in bound_entities:
+                    await _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
+                _bind_sensors_to_dial(
+                    hass, entry, dial_id, team_id, bound_entities,
+                )
 
     async def _update_now_playing(call) -> None:
         """Stream a now-playing update to a dial (cmd/now_playing).
