@@ -499,9 +499,12 @@ def _register_device(
 
     # Prefer the friendly label captured from cmd/config (see _handle_config).
     # Falls back to the raw dial_id when no label has been seen yet.
+    # The dial_id is appended in parentheses so the device picker
+    # disambiguates dials that share a label and so the operator can
+    # scan a long list by the canonical DECK-xxxx slug.
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     label = store.get("labels", {}).get(dial_id)
-    name = label or f"Deckhand {dial_id}"
+    name = f"{label} ({dial_id})" if label else f"Deckhand {dial_id}"
 
     # Only build a configuration_url when the IP looks like a valid
     # address. A hostile publisher with MQTT access could otherwise
