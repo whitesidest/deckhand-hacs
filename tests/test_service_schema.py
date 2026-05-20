@@ -94,7 +94,6 @@ UPDATE_SENSOR_VALUE_FIELDS = frozenset({
 REQUIRED_SERVICES = frozenset({
     "apply_overlay",
     "mount_face",
-    "mount_night_watch",
     "mount_perimeter_pulse",
     "push_theme",
     "reboot",

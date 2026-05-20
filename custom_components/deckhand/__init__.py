@@ -99,8 +99,8 @@ _IANA_TO_POSIX = {
 # Face-shaping fields are kept here because real automations need them
 # ("when air quality drops below X, flip Tyler into a 4-quad sensor
 # face for an hour"). For persistent face state, use ``mount_face`` /
-# ``mount_perimeter_pulse`` / ``mount_night_watch`` — those publish
-# retained cmd/face/<kind>/mount messages that survive reboots.
+# ``mount_perimeter_pulse`` — those publish retained
+# cmd/face/<kind>/mount messages that survive reboots.
 _OVERLAY_STRING_FIELDS = (
     "subtitle_text",
     "home_message",
@@ -1527,7 +1527,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         }
         for src, dst in (
             ("subtitle_text", "subtitle_text"),
-            ("paired_face_kind", "paired_face_kind"),
             ("contiguous", "contiguous"),
             ("bar_thickness", "bar_thickness"),
             ("bar_opacity", "bar_opacity"),
@@ -1595,63 +1594,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             len(clean_states), len(targets),
         )
 
-    async def _mount_night_watch(call) -> None:
-        """Mount the Night Watch ritual face with a configured sequence."""
-        await _require_admin(call)
-        device_id = call.data.get("device_id")
-        targets = _resolve_targets(hass, device_id)
-        if not targets:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="unknown_device",
-            )
-
-        raw_seq = call.data.get("sequence") or []
-        if not isinstance(raw_seq, list) or not raw_seq:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_sequence",
-            )
-        sequence = []
-        valid_actions = ("lock", "close", "acknowledge", "arm_night")
-        for entry in raw_seq:
-            if not isinstance(entry, dict):
-                continue
-            sid = entry.get("id")
-            if not isinstance(sid, str) or not sid.strip():
-                continue
-            action = entry.get("action", "lock")
-            if action not in valid_actions:
-                action = "lock"
-            sequence.append({
-                "id": sid.strip(),
-                "ha_entity": str(entry.get("ha_entity", "")),
-                "friendly_name": str(entry.get("friendly_name", sid)),
-                "action": action,
-                "current_state": str(entry.get("current_state", "")),
-            })
-        if not sequence:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_sequence",
-            )
-
-        payload: dict[str, Any] = {
-            "face_id": "night_watch",
-            "schema_version": 1,
-            "sequence": sequence,
-            "closing_dwell_s": int(call.data.get("closing_dwell_s") or 6),
-        }
-        arm = call.data.get("arm_flag_entity")
-        if isinstance(arm, str) and arm.strip():
-            payload["arm_flag_entity"] = arm.strip()
-
-        await _publish_face_mount("night_watch", payload, targets, retained=False)
-        _LOGGER.info(
-            "mount_night_watch: %d step(s) → %d dial(s)",
-            len(sequence), len(targets),
-        )
-
     async def _mount_face(call) -> None:
         """Generic mount — escape hatch for forward-compat with new faces."""
         await _require_admin(call)
@@ -1716,8 +1658,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(
             DOMAIN, "update_perimeter_state", _update_perimeter_state
         )
-    if not hass.services.has_service(DOMAIN, "mount_night_watch"):
-        hass.services.async_register(DOMAIN, "mount_night_watch", _mount_night_watch)
     if not hass.services.has_service(DOMAIN, "mount_face"):
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)
 

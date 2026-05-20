@@ -572,9 +572,9 @@ update_sensor_value:
         text:
 
 # ── Phase 6 dial-platform — face dispatch services ──────────────────────
-# Faces are functional UI layers (Perimeter Pulse, Night Watch, future
-# room-aware faces). Themes are atmosphere; faces are function. A face
-# is mounted onto a dial and either takes over the screen entirely
+# Faces are functional UI layers (Perimeter Pulse, future room-aware
+# faces). Themes are atmosphere; faces are function. A face is mounted
+# onto a dial and either takes over the screen entirely
 # (FACE_OWNS_SCREEN) or paints a thin overlay on top of the active
 # theme (default — Perimeter Pulse uses this mode).
 
@@ -658,15 +658,6 @@ mount_perimeter_pulse:
       example: "All Quiet"
       selector:
         text:
-    paired_face_kind:
-      name: Paired Face
-      description: >
-        Face id to mount on long-press. Defaults to night_watch — the
-        bedtime ritual.
-      default: night_watch
-      example: "night_watch"
-      selector:
-        text:
 
 update_perimeter_state:
   name: Update Perimeter State
@@ -699,57 +690,6 @@ update_perimeter_state:
           value: 0.62
       selector:
         object:
-
-mount_night_watch:
-  name: Mount Night Watch
-  description: >
-    Mount the Night Watch ritual face on a dial. Walks through a list
-    of locks/doors/windows step-by-step, each step is rotate-to-choose +
-    press-to-commit, ends in a constellation closing animation that
-    arms a configured boolean. Used as the paired face from Perimeter
-    Pulse long-press, but can be mounted directly too.
-  fields:
-    device_id:
-      name: Device
-      required: true
-      selector:
-        device:
-          integration: deckhand
-    sequence:
-      name: Sequence
-      description: >
-        Array of steps. Each step: { id, ha_entity, friendly_name,
-        action ("lock"/"close"/"acknowledge"/"arm_night"),
-        current_state }.
-      required: true
-      example: |
-        - id: front_door
-          ha_entity: lock.front_door
-          friendly_name: the front door
-          action: lock
-          current_state: unlocked
-        - id: alarm
-          ha_entity: input_boolean.night_watch_armed
-          friendly_name: the watch itself
-          action: arm_night
-          current_state: "off"
-      selector:
-        object:
-    closing_dwell_s:
-      name: Closing Dwell
-      description: How long the constellation closing animation plays.
-      default: 6
-      selector:
-        number:
-          min: 2
-          max: 30
-          unit_of_measurement: s
-    arm_flag_entity:
-      name: Arm Flag Entity
-      description: Optional input_boolean to flip on completion.
-      example: "input_boolean.night_watch_armed"
-      selector:
-        text:
 
 mount_face:
   name: Mount Face (Generic)
