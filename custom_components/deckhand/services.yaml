@@ -305,10 +305,10 @@ apply_overlay:
         Which face the dial home screen renders. ``clock`` is the
         default; ``sensor`` enables the 1-4 quadrant readouts (see the
         sensor_* fields below); ``message`` shows a big centered string
-        (see ``home_message``); ``weather`` /  ``energy`` /
-        ``framecast`` / ``volume`` / ``blank`` / ``image`` are their
-        dedicated faces. Persistent face state should be set via
-        ``mount_face``; this is the transient-flash variant.
+        (see ``home_message``); ``energy`` / ``framecast`` / ``volume`` /
+        ``blank`` / ``image`` are their dedicated faces. Persistent face
+        state should be set via ``mount_face``; this is the
+        transient-flash variant.
       example: "sensor"
       selector:
         select:
@@ -320,7 +320,6 @@ apply_overlay:
             - "image"
             - "blank"
             - "volume"
-            - "weather"
             - "energy"
             - "framecast"
     home_message:
@@ -396,15 +395,6 @@ apply_overlay:
           options:
             - subtitle
             - ring
-    weather_entity_id:
-      name: Weather entity ID
-      description: >
-        HA entity (``weather.*``) used when ``home_face`` is ``weather``.
-        The dial polls condition + temperature.
-      example: "weather.home"
-      selector:
-        entity:
-          domain: weather
     framecast_frame_id:
       name: FrameCast frame ID
       description: >
