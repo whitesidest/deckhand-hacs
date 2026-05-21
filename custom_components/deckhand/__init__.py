@@ -1182,20 +1182,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 "apply_overlay requires at least one field to be set"
             )
 
-        body = json.dumps(payload)
-        for dial_id, team_id in targets:
-            topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
-            await mqtt.async_publish(hass, topic, body)
-        _LOGGER.info(
-            "Applied overlay to %d dial(s): %s",
-            len(targets), sorted(payload.keys()),
-        )
-
-        # Push live values + register listeners for every entity the
-        # overlay just bound. ``cmd/overlay`` only carries entity ids;
-        # the firmware never reads from HA on its own. Per-dial fan-out
-        # so a room target wires up state-change listeners for every
-        # member dial.
+        # Pre-populate the dial's sensor LUT BEFORE the face swap so the
+        # first render of the new face shows real numbers. If cmd/overlay
+        # arrives first, the firmware runs build_clock() while the LUT
+        # still has no values for the new entities — quadrants render
+        # "—" and the per-slot rebuild is debounced to 1.5s, so the user
+        # sees a blank face (or the previous face's last values, if the
+        # quad slot entity ids happen to overlap) until the next HA state
+        # change. Publishing cmd/sensor_value first guarantees the LUT is
+        # warm by the time the overlay lands.
         bound_entities: list[tuple[str, str]] = []
         for q in quad_entries:
             bound_entities.append((q["entity_id"], q.get("label") or ""))
@@ -1206,6 +1201,20 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             for dial_id, team_id in targets:
                 for eid, lbl in bound_entities:
                     await _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
+
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "Applied overlay to %d dial(s): %s",
+            len(targets), sorted(payload.keys()),
+        )
+
+        # Register state-change listeners for ongoing updates after the
+        # face has switched.
+        if bound_entities:
+            for dial_id, team_id in targets:
                 _bind_sensors_to_dial(
                     hass, entry, dial_id, team_id, bound_entities,
                 )
