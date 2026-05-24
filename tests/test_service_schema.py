@@ -89,6 +89,14 @@ UPDATE_SENSOR_VALUE_FIELDS = frozenset({
     "device_id", "entity_id", "value", "label", "unit", "icon", "color",
 })
 
+SEND_INVITATION_FIELDS = frozenset({
+    "device_id", "text", "subtitle", "invitation_id",
+    "accept_label", "decline_label", "hold_seconds", "ttl_s",
+    "priority", "theme_override", "solid_color", "from_name", "on_accept",
+})
+
+CANCEL_INVITATION_FIELDS = frozenset({"device_id", "invitation_id"})
+
 # Services that MUST exist. The integration ships many; this is the
 # subset whose absence would break documented user workflows.
 REQUIRED_SERVICES = frozenset({
@@ -99,6 +107,8 @@ REQUIRED_SERVICES = frozenset({
     "reboot",
     "send_announcement",
     "send_countdown",
+    "send_invitation",
+    "cancel_invitation",
     "set_timezone",
     "update_now_playing",
     "update_sensor_value",
@@ -146,6 +156,12 @@ class ServicesYamlContractTests(unittest.TestCase):
 
     def test_update_sensor_value_fields(self):
         self._assert_fields("update_sensor_value", UPDATE_SENSOR_VALUE_FIELDS)
+
+    def test_send_invitation_fields(self):
+        self._assert_fields("send_invitation", SEND_INVITATION_FIELDS)
+
+    def test_cancel_invitation_fields(self):
+        self._assert_fields("cancel_invitation", CANCEL_INVITATION_FIELDS)
 
 
 class HandlerReadsDeclaredFieldsTests(unittest.TestCase):
@@ -205,6 +221,15 @@ class HandlerReadsDeclaredFieldsTests(unittest.TestCase):
         # the slot-2/3/4 iteration so substring match catches them.
         skip = {"device_id"}
         self._assert_handler_reads(APPLY_OVERLAY_FIELDS - skip)
+
+    def test_send_invitation_handler_reads_all_fields(self):
+        # device_id is read via _resolve_targets; skip.
+        skip = {"device_id"}
+        self._assert_handler_reads(SEND_INVITATION_FIELDS - skip)
+
+    def test_cancel_invitation_handler_reads_all_fields(self):
+        skip = {"device_id"}
+        self._assert_handler_reads(CANCEL_INVITATION_FIELDS - skip)
 
 
 class SmokeYamlValidityTests(unittest.TestCase):

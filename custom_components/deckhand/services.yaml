@@ -23,6 +23,24 @@ push_theme:
       example: "elysian"
       selector:
         text:
+    theme_options:
+      name: Theme options
+      description: >
+        Per-theme custom options for themes that accept them. Wedding
+        accepts ``diamond_count`` (0/1/2), ``initials`` (up to 3
+        characters), and ``flower_color`` (classic, blush, champagne,
+        lavender, white_orchid). Other themes have their own schemas
+        — open the theme in Helm's Gallery to see the available
+        options. Keys the dial doesn't recognise are silently ignored,
+        so it's safe to pre-stage options for upcoming themes.
+        Transient — for persistence across reboot, save the options
+        in the Helm UI instead.
+      example: |
+        diamond_count: 2
+        initials: "TM"
+        flower_color: blush
+      selector:
+        object:
 
 send_announcement:
   name: Send Announcement
@@ -644,8 +662,10 @@ mount_perimeter_pulse:
           step: 0.01
     subtitle_text:
       name: Subtitle
-      description: Text shown below the clock when calm.
-      example: "All Quiet"
+      description: >
+        Optional text rendered under the perimeter when no binding is
+        active. Leave blank if you don't want a calm-state caption — the
+        dial hides the line entirely when this field is empty.
       selector:
         text:
 
@@ -716,3 +736,145 @@ mount_face:
       default: true
       selector:
         boolean:
+
+send_invitation:
+  name: Send Invitation
+  description: >
+    Send a touch-and-hold consent prompt to a Deckhand dial. The dial
+    queues internally (FIFO, cap 5) and waits to display until the
+    clock face is idle — it never interrupts an in-progress
+    interaction. The guest accepts by touching and holding the
+    screen; declines by spinning the encoder. To run an automation on
+    accept or decline, listen for a ``deckhand_dial_event`` with
+    ``type: invitation_response`` and match on the ``invitation_id``
+    you supplied here (auto-generated if omitted, returned in the log
+    line).
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial to invite.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    text:
+      name: Prompt
+      description: The question or invitation shown on the dial.
+      required: true
+      example: "Stewards: open the bar?"
+      selector:
+        text:
+    subtitle:
+      name: Subtitle
+      description: Smaller line under the prompt. Optional.
+      example: "Hold the screen to confirm"
+      selector:
+        text:
+    invitation_id:
+      name: Invitation ID
+      description: >
+        Optional id echoed back in the response event. If you want one
+        automation to react to a specific invitation, set this so you
+        can match in the trigger. Auto-generated if omitted.
+      example: "invite-bar-open-1"
+      selector:
+        text:
+    accept_label:
+      name: Accept label
+      description: Instruction under the perimeter ring during the hold.
+      default: "Hold to accept"
+      selector:
+        text:
+    decline_label:
+      name: Decline label
+      description: Instruction shown for the spin-to-decline gesture.
+      default: "Spin to decline"
+      selector:
+        text:
+    hold_seconds:
+      name: Hold time
+      description: How long the guest must touch-and-hold to accept.
+      default: 5
+      selector:
+        number:
+          min: 2
+          max: 15
+          unit_of_measurement: seconds
+    ttl_s:
+      name: TTL (seconds)
+      description: >
+        Wall-clock window before the invitation auto-expires. The dial
+        emits an ``invitation_response`` with ``response: "expired"`` if
+        no one resolves it in time.
+      default: 600
+      selector:
+        number:
+          min: 10
+          max: 86400
+          unit_of_measurement: seconds
+    priority:
+      name: Priority
+      description: >
+        ``urgent`` jumps ahead of normal-priority items in the queue.
+        Use sparingly — the dial still waits for idle before displaying.
+      default: normal
+      selector:
+        select:
+          options:
+            - normal
+            - urgent
+    theme_override:
+      name: Theme override slug
+      description: >
+        Optional theme slug to render behind the prompt card. Falls back
+        to the dial's current theme. ``solid_color`` is ignored when
+        ``theme_override`` is set.
+      example: "concierge"
+      selector:
+        text:
+    solid_color:
+      name: Solid background color
+      description: 'Hex like "#0A1F2C" — used when no theme_override.'
+      example: "#0A1F2C"
+      selector:
+        text:
+    from_name:
+      name: From
+      description: Who the invitation is from. Optional.
+      example: "Home Assistant"
+      selector:
+        text:
+    on_accept:
+      name: On-accept payload
+      description: >
+        Optional opaque JSON object echoed by the dial when accepted.
+        For pure-HA flows you can omit this — listen for the
+        ``invitation_response`` event with ``response: "accepted"`` and
+        branch in the automation. Provide this only when Helm (or
+        another consumer of the response event) should route the
+        action server-side. Shape:
+        ``{ type: "fire_ha_service" | "push_theme" | ..., data: {...} }``.
+      selector:
+        object:
+
+cancel_invitation:
+  name: Cancel Invitation
+  description: >
+    Retract a pending or displayed invitation by id. If the dial was
+    showing it, the dial emits an ``invitation_response`` with
+    ``response: "cancelled"``.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial that holds the invitation.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    invitation_id:
+      name: Invitation ID
+      description: The same id supplied to ``send_invitation``.
+      required: true
+      example: "invite-bar-open-1"
+      selector:
+        text:

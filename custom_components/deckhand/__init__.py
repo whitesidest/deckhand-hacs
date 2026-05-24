@@ -891,13 +891,30 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps({"id": theme})
+        # Per-theme custom options ("config" in firmware terms — wedding's
+        # diamond_count / initials / flower_color, photo themes' overrides,
+        # etc.). Optional; only forwarded when the operator supplied non-
+        # empty values. The dial firmware accepts unknown keys silently so
+        # automations can pre-stage options for themes they don't have yet.
+        # NOTE: this path is TRANSIENT — it doesn't update Helm's stored
+        # DialThemeConfig. For persistence across reboots, set the options
+        # in the Helm UI (Gallery → push modal).
+        theme_options = call.data.get("theme_options")
+        payload: dict[str, Any] = {"id": theme}
+        if isinstance(theme_options, dict) and theme_options:
+            payload["config"] = {
+                k: v for k, v in theme_options.items()
+                if isinstance(k, str) and not k.startswith("_")
+            }
+        body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_THEME.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
         _LOGGER.info(
-            "Pushed theme '%s' to %d dial(s): %s",
+            "Pushed theme '%s' to %d dial(s): %s%s",
             theme, len(targets), ", ".join(d for d, _ in targets),
+            f" (options: {sorted(payload.get('config', {}).keys())})"
+            if "config" in payload else "",
         )
 
     async def _send_announcement(call) -> None:
@@ -1640,6 +1657,122 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             face_id, len(targets), retained,
         )
 
+    async def _send_invitation(call) -> None:
+        """Send a touch-and-hold consent prompt to a dial.
+
+        Publishes ``cmd/face/invitation/mount`` directly (no Helm row).
+        The dial queues internally (FIFO, cap 5) and shows when the
+        clock face is idle. The guest's touch-and-hold accepts; encoder
+        spin declines. Listen for ``deckhand_dial_event`` with
+        ``type: "invitation_response"`` and ``payload.invitation_id``
+        matching what you sent to wire automations on accept/decline.
+        """
+        import secrets
+
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        text = (call.data.get("text") or "").strip()
+        if not text:
+            raise ServiceValidationError("text is required")
+
+        invitation_id = (call.data.get("invitation_id") or "").strip()
+        if not invitation_id:
+            invitation_id = secrets.token_urlsafe(12)
+
+        try:
+            hold_seconds = int(call.data.get("hold_seconds") or 5)
+        except (TypeError, ValueError) as exc:
+            raise ServiceValidationError("hold_seconds must be an integer") from exc
+        hold_seconds = max(2, min(15, hold_seconds))
+
+        try:
+            ttl_s = int(call.data.get("ttl_s") or 600)
+        except (TypeError, ValueError) as exc:
+            raise ServiceValidationError("ttl_s must be an integer") from exc
+        ttl_s = max(10, min(86400, ttl_s))
+
+        priority = (call.data.get("priority") or "normal").strip()
+        if priority not in ("normal", "urgent"):
+            priority = "normal"
+
+        payload: dict[str, Any] = {
+            "invitation_id": invitation_id,
+            "text": text[:240],
+            "subtitle": str(call.data.get("subtitle") or "")[:120],
+            "accept_label": str(call.data.get("accept_label") or "Hold to accept")[:64],
+            "decline_label": str(call.data.get("decline_label") or "Spin to decline")[:64],
+            "hold_seconds": hold_seconds,
+            "ttl_s": ttl_s,
+            "priority": priority,
+        }
+        theme_override = (call.data.get("theme_override") or "").strip()
+        if theme_override:
+            payload["theme_override"] = theme_override[:40]
+        solid_color = (call.data.get("solid_color") or "").strip()
+        if solid_color:
+            payload["solid_color"] = solid_color[:16]
+        from_name = (call.data.get("from_name") or "").strip()
+        if from_name:
+            payload["from_name"] = from_name[:64]
+
+        # on_accept is OPAQUE JSON. The firmware echoes it verbatim in
+        # the response event so HA automations (or Helm, if the dial's
+        # team has the Helm row) can route on accept. For pure-HA flows
+        # this is usually omitted — HA listens for deckhand_dial_event
+        # with type=invitation_response and branches in the automation.
+        on_accept = call.data.get("on_accept")
+        if isinstance(on_accept, dict) and on_accept:
+            payload["on_accept"] = on_accept
+
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_FACE_MOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id="invitation",
+            )
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "send_invitation: %s → %d dial(s) (id=%s)",
+            text[:40], len(targets), invitation_id,
+        )
+
+    async def _cancel_invitation(call) -> None:
+        """Retract an invitation by id.
+
+        Publishes ``cmd/face/invitation/cancel``. If the invitation was
+        still pending in the queue or actively displayed, the dial
+        emits a response event with ``response: "cancelled"``.
+        """
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        invitation_id = (call.data.get("invitation_id") or "").strip()
+        if not invitation_id:
+            raise ServiceValidationError("invitation_id is required")
+
+        body = json.dumps({"invitation_id": invitation_id})
+        for dial_id, team_id in targets:
+            topic = (
+                f"deckhand/{team_id}/dial/{dial_id}/cmd/face/invitation/cancel"
+            )
+            await mqtt.async_publish(hass, topic, body)
+        _LOGGER.info(
+            "cancel_invitation: %s → %d dial(s)",
+            invitation_id, len(targets),
+        )
+
     # Only register once
     if not hass.services.has_service(DOMAIN, "push_theme"):
         hass.services.async_register(DOMAIN, "push_theme", _push_theme)
@@ -1671,6 +1804,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
     if not hass.services.has_service(DOMAIN, "mount_face"):
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)
+    if not hass.services.has_service(DOMAIN, "send_invitation"):
+        hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
+    if not hass.services.has_service(DOMAIN, "cancel_invitation"):
+        hass.services.async_register(DOMAIN, "cancel_invitation", _cancel_invitation)
 
 
 def _resolve_dial(
