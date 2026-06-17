@@ -30,6 +30,15 @@ TOPIC_CMD_OVERLAY = "deckhand/{team_id}/dial/{dial_id}/cmd/overlay"
 TOPIC_CMD_NOW_PLAYING = "deckhand/{team_id}/dial/{dial_id}/cmd/now_playing"
 TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
 
+# sensor_watches: retained per-dial list of HA entity_ids the dial's
+# current sensor face is watching. Helm + Console publish this on every
+# face change; HACS subscribes and turns each entity into an
+# async_track_state_change_event listener so a state change pushes
+# cmd/sensor_value within a second (vs ~60s polling fallback). Empty
+# ``entities`` list means "this dial isn't on a sensor face right now"
+# — drop any listeners we registered for it.
+TOPIC_SENSOR_WATCHES = "deckhand/{team_id}/dial/+/sensor_watches"
+
 # Phase 6 dial-platform — face dispatch topics. {face_id} is the
 # face identifier (e.g. "perimeter_pulse") chosen by the firmware
 # face registry.

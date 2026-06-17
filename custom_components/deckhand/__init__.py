@@ -41,6 +41,7 @@ from .const import (
     TOPIC_CMD_REBOOT,
     TOPIC_CMD_SENSOR_VALUE,
     TOPIC_CMD_THEME,
+    TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
 )
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
@@ -151,6 +152,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # Disposable that unsubs the active state-change listener. Swapped
         # out on options update so the binding list stays in sync.
         "_media_player_unsub": None,
+        # dial_id -> {"entity_ids": [...], "unsub": callable}
+        #
+        # Tracks the sensor-face entities Helm/Console asked us to watch
+        # for this dial (via the retained ``sensor_watches`` topic). Kept
+        # separate from ``_sensor_bindings`` (which is the apply_overlay
+        # transient binding map) so the two paths can coexist — overlay
+        # can pin an entity on top of whatever the face is already
+        # watching, and an overlay unbind doesn't tear down the
+        # persistent face listeners.
+        "_sensor_watch_bindings": {},
     }
 
     # Subscribe to status heartbeats for dial discovery
@@ -451,6 +462,65 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         await mqtt.async_subscribe(hass, event_topic, _handle_event, qos=0)
     )
 
+    # Subscribe to the retained per-dial sensor_watches list. Helm and
+    # Console publish this every time a dial's sensor face mounts or
+    # changes its bound entities. We register an
+    # ``async_track_state_change_event`` listener per entity so HA state
+    # changes get pushed to the dial as cmd/sensor_value within a second
+    # — the realtime path that replaces the 60s backend poll for users
+    # with HACS installed.
+    sensor_watches_topic = TOPIC_SENSOR_WATCHES.format(team_id=team_id)
+
+    @callback
+    def _handle_sensor_watches(msg: mqtt.ReceiveMessage) -> None:
+        """Refresh the per-dial sensor-face listener set."""
+        parts = msg.topic.split("/")
+        if len(parts) < 5:
+            return
+        dial_id = parts[3]
+
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if store is None:
+            return
+
+        # Empty retained payload = "no sensor face on this dial right
+        # now" — tear down whatever listeners we had for it.
+        raw = msg.payload
+        if not raw:
+            _set_sensor_watch_listeners(hass, entry, dial_id, team_id, [])
+            return
+
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            _LOGGER.warning("Invalid JSON on %s", msg.topic)
+            return
+
+        entities = payload.get("entities")
+        if not isinstance(entities, list):
+            return
+
+        # Normalise + guard against a hostile publisher: cap the list,
+        # drop non-string entries, and clip overlong strings to the
+        # firmware's field widths. Mirrors the apply_overlay validator.
+        watch_list: list[tuple[str, str]] = []
+        for item in entities[:64]:
+            if not isinstance(item, dict):
+                continue
+            eid = item.get("entity_id")
+            if not isinstance(eid, str) or not eid:
+                continue
+            lbl = item.get("label") or ""
+            if not isinstance(lbl, str):
+                lbl = ""
+            watch_list.append((eid[:128], lbl[:64]))
+
+        _set_sensor_watch_listeners(hass, entry, dial_id, team_id, watch_list)
+
+    entry.async_on_unload(
+        await mqtt.async_subscribe(hass, sensor_watches_topic, _handle_sensor_watches, qos=0)
+    )
+
     # Set up entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -473,6 +543,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) ->
         if store and store.get("_media_player_unsub"):
             store["_media_player_unsub"]()
         for binding in (store or {}).get("_sensor_bindings", {}).values():
+            unsub = binding.get("unsub")
+            if unsub:
+                unsub()
+        for binding in (store or {}).get("_sensor_watch_bindings", {}).values():
             unsub = binding.get("unsub")
             if unsub:
                 unsub()
@@ -745,6 +819,74 @@ def _bind_sensors_to_dial(
 
     unsub = async_track_state_change_event(hass, watched, _on_change)
     bindings[dial_id] = {"entity_ids": watched, "unsub": unsub}
+
+
+def _set_sensor_watch_listeners(
+    hass: HomeAssistant,
+    entry: DeckhandConfigEntry,
+    dial_id: str,
+    team_id: str,
+    entities: list[tuple[str, str]],
+) -> None:
+    """Reconcile per-dial sensor-watch listeners with the latest
+    retained ``sensor_watches`` payload from Helm/Console.
+
+    Idempotent: replaces any previous binding for this dial outright.
+    Empty ``entities`` tears down all listeners — equivalent to "this
+    dial switched away from a sensor face."
+
+    Kept distinct from ``_bind_sensors_to_dial`` (apply_overlay) so the
+    two paths layer cleanly: an overlay can pin extra entities on top
+    of what the persistent face is already watching, and tearing one
+    down doesn't touch the other.
+    """
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if store is None:
+        return
+    bindings: dict[str, Any] = store.setdefault("_sensor_watch_bindings", {})
+    prev = bindings.get(dial_id)
+    if prev:
+        prev["unsub"]()
+        bindings.pop(dial_id, None)
+
+    if not entities:
+        _LOGGER.info("sensor_watches: cleared listeners for %s", dial_id)
+        return
+
+    label_by_eid = {eid: lbl for eid, lbl in entities}
+    watched = list(label_by_eid.keys())
+
+    @callback
+    def _on_change(event: Event) -> None:
+        eid = event.data.get("entity_id")
+        if eid not in label_by_eid:
+            return
+        payload = _build_sensor_value_payload(hass, eid, label_by_eid[eid])
+        if payload is None:
+            return
+        topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
+        # Retain — see _bind_sensors_to_dial rationale: a dial reboot
+        # would otherwise blank the sensor face to "—" until the entity
+        # next fires.
+        hass.async_create_task(
+            mqtt.async_publish(hass, topic, json.dumps(payload), retain=True)
+        )
+
+    unsub = async_track_state_change_event(hass, watched, _on_change)
+    bindings[dial_id] = {"entity_ids": watched, "unsub": unsub}
+
+    # Warm the LUT with current values for every newly-bound entity so
+    # the dial renders real numbers on first frame instead of waiting
+    # for the first state_change event to fire.
+    for eid, lbl in entities:
+        hass.async_create_task(
+            _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
+        )
+
+    _LOGGER.info(
+        "sensor_watches: armed %d listener(s) for %s (entities=%s)",
+        len(watched), dial_id, ", ".join(watched),
+    )
 
 
 @callback
