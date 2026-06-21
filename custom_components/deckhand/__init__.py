@@ -470,6 +470,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         await mqtt.async_subscribe(hass, event_topic, _handle_event, qos=0)
     )
 
+    # Subscribe to the HA event bus for dial lifecycle events fired by
+    # Helm (apps.devices.services.lifecycle._fan_out → fire_ha_event_task
+    # → HA REST). A `deregister` event must remove the dial from HA's
+    # device registry — otherwise dials decommissioned in Helm linger as
+    # dead targets in the Push Theme / Send Announcement pickers and the
+    # operator can't tell which dials are actually live. A `register`
+    # event is a no-op here because the existing status-topic
+    # subscription auto-registers the device on the next status frame.
+    @callback
+    def _handle_lifecycle(event) -> None:
+        data = event.data or {}
+        dial_id = data.get("dial_id")
+        if not dial_id:
+            return
+        if data.get("event_type") != "deregister":
+            return
+        registry = dr.async_get(hass)
+        device = registry.async_get_device(identifiers={(DOMAIN, dial_id)})
+        if device is None:
+            _LOGGER.info("Lifecycle deregister for %s — already absent from device registry", dial_id)
+            return
+        _LOGGER.info("Lifecycle deregister for %s — removing from device registry", dial_id)
+        registry.async_remove_device(device.id)
+
+    entry.async_on_unload(
+        hass.bus.async_listen(f"{DOMAIN}_dial_event", _handle_lifecycle)
+    )
+
     # Subscribe to the retained per-dial sensor_watches list. Helm and
     # Console publish this every time a dial's sensor face mounts or
     # changes its bound entities. We register an
