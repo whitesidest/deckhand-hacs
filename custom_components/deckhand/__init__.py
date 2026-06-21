@@ -400,6 +400,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # individual dials in the device selector. Identifier prefix
         # `group:` namespaces it from raw dial_ids and serves as the
         # disambiguator for _resolve_dial.
+        #
+        # The device picker dropdown doesn't render per-device icons or
+        # the `model` field prominently, so the operator picking a
+        # "Push Theme" target sees rooms and dials in one flat list with
+        # no visual distinction. We bake the differentiation into the
+        # name itself — a leading 🏠 glyph as a pseudo-icon and a
+        # trailing "(Room)" suffix so the picker reads e.g.
+        # "🏠 Office (Room)" next to "Tyler Dev (DECK-3140)".
         registry = dr.async_get(hass)
         for gid, group in normalized.items():
             registry.async_get_or_create(
@@ -407,7 +415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
                 identifiers={(DOMAIN, f"group:{gid}")},
                 manufacturer=MANUFACTURER,
                 model="Room",
-                name=group["name"],
+                name=f"🏠 {group['name']} (Room)",
             )
 
         # Deregister rooms that vanished from the published list — the
