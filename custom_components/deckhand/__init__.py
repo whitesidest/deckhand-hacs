@@ -112,7 +112,7 @@ _OVERLAY_STRING_FIELDS = (
 _OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
 _OVERLAY_HOME_FACES = {
     "theme", "clock", "message", "sensor", "image", "blank",
-    "volume", "energy", "framecast",
+    "volume", "framecast",
 }
 _OVERLAY_QUAD_SLOTS = (2, 3, 4)
 _OVERLAY_MARQUEE_POSITIONS = {"subtitle", "ring"}

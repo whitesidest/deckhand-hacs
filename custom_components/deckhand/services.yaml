@@ -323,8 +323,8 @@ apply_overlay:
         Which face the dial home screen renders. ``clock`` is the
         default; ``sensor`` enables the 1-4 quadrant readouts (see the
         sensor_* fields below); ``message`` shows a big centered string
-        (see ``home_message``); ``energy`` / ``framecast`` / ``volume`` /
-        ``blank`` / ``image`` are their dedicated faces. Persistent face
+        (see ``home_message``); ``framecast`` / ``volume`` / ``blank`` /
+        ``image`` are their dedicated faces. Persistent face
         state should be set via ``mount_face``; this is the
         transient-flash variant.
       example: "sensor"
@@ -338,7 +338,6 @@ apply_overlay:
             - "image"
             - "blank"
             - "volume"
-            - "energy"
             - "framecast"
     home_message:
       name: Home Message
