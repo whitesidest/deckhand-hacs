@@ -163,6 +163,29 @@ class ServicesYamlContractTests(unittest.TestCase):
     def test_cancel_invitation_fields(self):
         self._assert_fields("cancel_invitation", CANCEL_INVITATION_FIELDS)
 
+    def test_apply_overlay_subtitle_mode_options(self):
+        """The subtitle_mode selector must offer every supported mode.
+
+        ``ical_next_event`` is server-materialized (Helm/Console resolve
+        it to ``custom`` text) but the dial still accepts it via
+        ``cmd/overlay``, so the HA picker must expose it. The handler
+        passes the validated mode straight through; see
+        _OVERLAY_SUBTITLE_MODES in __init__.py.
+        """
+        fields = self.services["apply_overlay"].get("fields") or {}
+        options = (
+            fields.get("subtitle_mode", {})
+            .get("selector", {})
+            .get("select", {})
+            .get("options", [])
+        )
+        for mode in ("theme", "custom", "date", "date_year",
+                     "ical_next_event", "none"):
+            self.assertIn(
+                mode, options,
+                f"subtitle_mode selector is missing '{mode}': {options}",
+            )
+
 
 class HandlerReadsDeclaredFieldsTests(unittest.TestCase):
     """services.yaml declaring a field is necessary but not sufficient.
@@ -230,6 +253,19 @@ class HandlerReadsDeclaredFieldsTests(unittest.TestCase):
     def test_cancel_invitation_handler_reads_all_fields(self):
         skip = {"device_id"}
         self._assert_handler_reads(CANCEL_INVITATION_FIELDS - skip)
+
+    def test_handler_accepts_ical_next_event_subtitle_mode(self):
+        """The handler validates subtitle_mode against an allow-set.
+
+        If ``ical_next_event`` isn't in _OVERLAY_SUBTITLE_MODES the
+        handler raises before the value ever reaches cmd/overlay, so the
+        services.yaml option would be silently rejected at runtime.
+        """
+        self.assertIn(
+            '"ical_next_event"', self.text,
+            "ical_next_event must appear in _OVERLAY_SUBTITLE_MODES so the "
+            "apply_overlay handler accepts it instead of raising.",
+        )
 
 
 class SmokeYamlValidityTests(unittest.TestCase):

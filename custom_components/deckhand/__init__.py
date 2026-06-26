@@ -109,7 +109,9 @@ _OVERLAY_STRING_FIELDS = (
     "sensor_label",
     "framecast_frame_id",
 )
-_OVERLAY_SUBTITLE_MODES = {"theme", "custom", "date", "date_year", "none"}
+_OVERLAY_SUBTITLE_MODES = {
+    "theme", "custom", "date", "date_year", "ical_next_event", "none",
+}
 _OVERLAY_HOME_FACES = {
     "theme", "clock", "message", "sensor", "image", "blank",
     "volume", "framecast",

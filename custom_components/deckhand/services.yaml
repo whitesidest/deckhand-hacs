@@ -288,8 +288,10 @@ apply_overlay:
       description: >
         How the dial picks the subtitle source. ``theme`` follows the
         theme default, ``custom`` shows the ``subtitle_text`` you provide,
-        ``date`` / ``date_year`` show the calendar date, ``none`` hides
-        the subtitle entirely.
+        ``date`` / ``date_year`` show the calendar date,
+        ``ical_next_event`` shows your next upcoming calendar event
+        (materialized server-side from your configured iCal/Google
+        Calendar feeds), ``none`` hides the subtitle entirely.
       example: "custom"
       selector:
         select:
@@ -298,6 +300,7 @@ apply_overlay:
             - "custom"
             - "date"
             - "date_year"
+            - "ical_next_event"
             - "none"
     subtitle_text:
       name: Subtitle text
