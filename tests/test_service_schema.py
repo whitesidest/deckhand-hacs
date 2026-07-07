@@ -83,6 +83,8 @@ PUSH_THEME_FIELDS = frozenset({"device_id", "theme"})
 
 SEND_ANNOUNCEMENT_FIELDS = frozenset({
     "device_id", "message", "from_name", "duration", "animation",
+    # Doorbell / visitor image backdrop (LAN-direct cmd/image push).
+    "snapshot_entity", "image_url",
 })
 
 UPDATE_SENSOR_VALUE_FIELDS = frozenset({
@@ -253,6 +255,11 @@ class HandlerReadsDeclaredFieldsTests(unittest.TestCase):
     def test_cancel_invitation_handler_reads_all_fields(self):
         skip = {"device_id"}
         self._assert_handler_reads(CANCEL_INVITATION_FIELDS - skip)
+
+    def test_send_announcement_handler_reads_image_fields(self):
+        """The doorbell fields must be read by the handler, not just
+        declared in services.yaml — otherwise the image never streams."""
+        self._assert_handler_reads(frozenset({"snapshot_entity", "image_url"}))
 
     def test_handler_accepts_ical_next_event_subtitle_mode(self):
         """The handler validates subtitle_mode against an allow-set.

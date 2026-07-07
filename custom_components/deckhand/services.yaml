@@ -109,6 +109,35 @@ send_announcement:
             - "signal:priority"
             - "signal:emergency"
             - "signal:dnd"
+    snapshot_entity:
+      name: Camera snapshot
+      description: >
+        Optional camera entity to snapshot and display as the
+        announcement backdrop — the natural doorbell path. HACS fetches
+        the frame over the LAN, converts it to RGB565, and streams it to
+        the dial directly over MQTT (it does not route through Helm). The
+        dial suppresses its theme animation while the image arrives. If
+        the snapshot can't be fetched, the text announcement is still
+        sent. Takes precedence over ``image_url`` if both are set.
+
+        Images render at 360x360 (the universal size that displays on
+        every dial; AMOLED dials upscale) since HACS doesn't track each
+        dial's hardware type.
+      example: "camera.front_door"
+      selector:
+        entity:
+          domain: camera
+    image_url:
+      name: Image URL
+      description: >
+        Optional image URL to fetch and display as the announcement
+        backdrop. Fetched via HA's shared HTTP session, converted to
+        RGB565, and streamed to the dial over MQTT. Must return an
+        ``image/*`` content type. Ignored if ``snapshot_entity`` is set.
+        On fetch failure the text announcement is still sent.
+      example: "http://192.168.1.50/snapshot.jpg"
+      selector:
+        text:
 
 send_countdown:
   name: Send Countdown

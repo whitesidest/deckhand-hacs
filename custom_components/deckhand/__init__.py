@@ -47,6 +47,7 @@ from .const import (
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
 )
+from .image_push import publish_image_to_dial
 
 # IANA → POSIX TZ map. The firmware hands the value straight to
 # setenv("TZ", ...) which only understands POSIX, not IANA, so we have
@@ -1098,13 +1099,23 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _send_announcement(call) -> None:
-        """Send an announcement to a dial or whole room (admin-only)."""
+        """Send an announcement to a dial or whole room (admin-only).
+
+        Optionally accompanies the text with an image backdrop pushed
+        straight to the broker (cmd/image), sourced from either a camera
+        entity snapshot (``snapshot_entity``) or an image URL
+        (``image_url``). This is the LAN-direct doorbell path — HACS does
+        the JPEG→RGB565 conversion + chunking itself rather than routing
+        through Helm's REST API, because the camera lives in HA.
+        """
         await _require_admin(call)
         device_id = call.data.get("device_id")
         message = call.data.get("message")
         from_name = call.data.get("from_name", "Home Assistant")
         duration = call.data.get("duration", 30)
         animation = call.data.get("animation", "none")
+        snapshot_entity = call.data.get("snapshot_entity")
+        image_url = call.data.get("image_url")
         if not isinstance(message, str) or not message.strip():
             _LOGGER.warning("send_announcement called with empty message")
             raise ServiceValidationError(
@@ -1121,6 +1132,17 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
+
+        # Fetch the image bytes up front (once for the whole room). A
+        # fetch failure is non-fatal — we still send the text announce so
+        # the doorbell chime never silently drops just because the camera
+        # hiccuped.
+        image_bytes: bytes | None = None
+        if snapshot_entity or image_url:
+            image_bytes = await _fetch_announcement_image(
+                hass, snapshot_entity, image_url
+            )
+
         payload: dict[str, Any] = {
             "message": message,
             "from": from_name,
@@ -1132,13 +1154,29 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # the active theme set as its notification animation.
         if isinstance(animation, str) and animation and animation != "none":
             payload["animation"] = animation
+        # Tell the dial an image backdrop is streaming so it suppresses
+        # theme animation and waits for the cmd/image chunks. Firmware
+        # reads this as ``announce_has_pending_image`` (mirrors Helm's
+        # push_announcement_to_dial ``image=True``).
+        if image_bytes is not None:
+            payload["image"] = True
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
+            # cmd/announce with image:true FIRST, then the image stream.
             await mqtt.async_publish(hass, topic, body)
+            if image_bytes is not None:
+                try:
+                    await publish_image_to_dial(hass, team_id, dial_id, image_bytes)
+                except Exception:  # noqa: BLE001 - best-effort; text already sent
+                    _LOGGER.exception(
+                        "send_announcement: image push failed for dial %s "
+                        "(text announcement was still sent)",
+                        dial_id,
+                    )
         _LOGGER.info(
-            "Sent announcement to %d dial(s): %s (animation=%s)",
-            len(targets), message, animation,
+            "Sent announcement to %d dial(s): %s (animation=%s, image=%s)",
+            len(targets), message, animation, image_bytes is not None,
         )
 
     async def _send_countdown(call) -> None:
@@ -2031,6 +2069,72 @@ def _resolve_dial(
         team_id = entry.data.get(CONF_TEAM_ID)
         if team_id:
             return dial_id, str(team_id)
+    return None
+
+
+async def _fetch_announcement_image(
+    hass: HomeAssistant,
+    snapshot_entity: str | None,
+    image_url: str | None,
+) -> bytes | None:
+    """Fetch image bytes for an announcement backdrop.
+
+    ``snapshot_entity`` (a camera entity) takes precedence over
+    ``image_url``. Returns the raw encoded bytes (JPEG/PNG/…) or ``None``
+    on any failure — the caller treats ``None`` as "send the text
+    announcement without an image" so a camera hiccup never drops the
+    whole notification.
+    """
+    if snapshot_entity:
+        try:
+            from homeassistant.components.camera import async_get_image
+
+            image = await async_get_image(hass, snapshot_entity)
+            return image.content
+        except Exception:  # noqa: BLE001 - best-effort; log + fall through
+            _LOGGER.warning(
+                "send_announcement: failed to fetch camera snapshot from %s "
+                "— sending text announcement without image",
+                snapshot_entity,
+                exc_info=True,
+            )
+            return None
+
+    if image_url:
+        try:
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+            session = async_get_clientsession(hass)
+            async with session.get(image_url) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("Content-Type", "").lower()
+                # Require image/* explicitly — guards against fetching a
+                # non-image (SSRF-ish) URL and feeding it to PIL.
+                if not content_type.startswith("image/"):
+                    _LOGGER.warning(
+                        "send_announcement: image_url %s returned non-image "
+                        "content-type %r — skipping image",
+                        image_url,
+                        content_type,
+                    )
+                    return None
+                data = await resp.read()
+                if not data:
+                    _LOGGER.warning(
+                        "send_announcement: image_url %s returned empty body",
+                        image_url,
+                    )
+                    return None
+                return data
+        except Exception:  # noqa: BLE001 - best-effort; log + fall through
+            _LOGGER.warning(
+                "send_announcement: failed to fetch image_url %s "
+                "— sending text announcement without image",
+                image_url,
+                exc_info=True,
+            )
+            return None
+
     return None
 
 
