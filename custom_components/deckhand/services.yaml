@@ -1050,6 +1050,88 @@ dismiss_alarm:
           integration: deckhand
           multiple: true
 
+enroll_credential:
+  name: Enroll Credential
+  description: >
+    Promote an NFC tap into a credential (tap-first, assign-later). Tap
+    the new card/fob on the dial, then call this within 15 minutes —
+    the most recent unrecognized tap on that dial is enrolled. Identity
+    and Role are created by name if they don't exist.
+  fields:
+    device_id:
+      name: Device
+      description: The dial the card was tapped on.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    identity_name:
+      name: Identity Name
+      required: true
+      example: "Guest Ana"
+      selector:
+        text:
+    role:
+      name: Role
+      description: Default role for this credential (created if new).
+      required: true
+      example: "Guest"
+      selector:
+        text:
+    label:
+      name: Label
+      example: "Blue fob"
+      selector:
+        text:
+    uid_hash:
+      name: UID Hash (advanced)
+      description: >
+        Explicit 64-char credential hash. Omit to use the latest
+        unrecognized tap on the dial.
+      selector:
+        text:
+
+revoke_credential:
+  name: Revoke Credential
+  description: >
+    Revoke every active credential for an identity — the checkout
+    automation ("guest checked out → their fob stops working").
+    Restorable with restore_credential.
+  fields:
+    device_id:
+      name: Device
+      description: Any dial (identity match is team-wide).
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    identity_name:
+      name: Identity Name
+      required: true
+      example: "Guest Ana"
+      selector:
+        text:
+
+restore_credential:
+  name: Restore Credential
+  description: Restore previously revoked credentials for an identity.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    identity_name:
+      name: Identity Name
+      required: true
+      example: "Guest Ana"
+      selector:
+        text:
+
 send_invitation:
   name: Send Invitation
   description: >

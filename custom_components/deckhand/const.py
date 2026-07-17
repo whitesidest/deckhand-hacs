@@ -58,6 +58,8 @@ TOPIC_MENU_REQUEST = "deckhand/{team_id}/dial/{dial_id}/menu_request"
 # Alarm lifecycle (create/enable/disable/snooze/dismiss) — consumed by
 # Helm's MQTT listener (handle_alarm_request). SF-invocable parity.
 TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"
+# Credential lifecycle (enroll/revoke/restore) — Helm handle_credential_request.
+TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"
 
 # Perimeter Pulse treatment names recognised by the firmware. Kept here so
 # the HACS service schema can validate without the user having to re-read

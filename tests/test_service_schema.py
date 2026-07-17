@@ -409,5 +409,32 @@ class AlarmServicesTests(unittest.TestCase):
         const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
         self.assertIn('TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"', const)
 
+
+class CredentialServicesTests(unittest.TestCase):
+    """Pin the credential-service surface (2026-07-17, SF parity)."""
+
+    REQUIRED = {
+        "enroll_credential": frozenset({"device_id", "identity_name", "role", "label", "uid_hash"}),
+        "revoke_credential": frozenset({"device_id", "identity_name"}),
+        "restore_credential": frozenset({"device_id", "identity_name"}),
+    }
+
+    def test_services_declare_fields(self):
+        services = _load_services()
+        for svc, fields in self.REQUIRED.items():
+            self.assertIn(svc, services, f"{svc} missing")
+            declared = set((services[svc].get("fields") or {}).keys())
+            self.assertFalse(fields - declared, f"{svc} missing fields")
+
+    def test_handlers_registered(self):
+        src = _load_init_text()
+        for svc in self.REQUIRED:
+            self.assertIn(f'"{svc}"', src, f"{svc} not registered")
+
+    def test_topic_shape(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn('TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"', const)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

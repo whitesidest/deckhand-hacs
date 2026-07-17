@@ -37,6 +37,7 @@ from .const import (
     TOPIC_CMD_FACE_MOUNT,
     TOPIC_CMD_FACE_UNMOUNT,
     TOPIC_ALARM_REQUEST,
+    TOPIC_CREDENTIAL_REQUEST,
     TOPIC_MENU_REQUEST,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
@@ -2063,6 +2064,74 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         n = await _publish_alarm_request(call, {"action": "dismiss"})
         _LOGGER.info("dismiss_alarm → %d dial(s)", n)
 
+    async def _publish_credential_request(call, payload: dict) -> int:
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CREDENTIAL_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        return len(targets)
+
+    async def _enroll_credential(call) -> None:
+        """Enroll an NFC credential (tap-first, assign-later).
+
+        Tap the new card/fob on the dial, then call this within 15
+        minutes — the most recent unknown tap on that dial is promoted.
+        Or pass uid_hash explicitly. Identity + Role are created by
+        name if new (SF EnrollCredential parity).
+        """
+        await _require_admin(call)
+        identity_name = (call.data.get("identity_name") or "").strip()
+        role = (call.data.get("role") or "").strip()
+        if not identity_name or not role:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        payload: dict[str, Any] = {
+            "action": "enroll",
+            "identity_name": identity_name,
+            "role": role,
+        }
+        for k in ("uid_hash", "label"):
+            if call.data.get(k):
+                payload[k] = str(call.data[k]).strip()
+        n = await _publish_credential_request(call, payload)
+        _LOGGER.info("enroll_credential: %r as %r → %d dial(s)", identity_name, role, n)
+
+    async def _revoke_credential(call) -> None:
+        """Revoke every active credential for an identity (checkout flow)."""
+        await _require_admin(call)
+        identity_name = (call.data.get("identity_name") or "").strip()
+        if not identity_name:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        n = await _publish_credential_request(
+            call, {"action": "revoke", "identity_name": identity_name}
+        )
+        _LOGGER.info("revoke_credential: %r → %d dial(s)", identity_name, n)
+
+    async def _restore_credential(call) -> None:
+        """Restore previously revoked credentials for an identity."""
+        await _require_admin(call)
+        identity_name = (call.data.get("identity_name") or "").strip()
+        if not identity_name:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        n = await _publish_credential_request(
+            call, {"action": "restore", "identity_name": identity_name}
+        )
+        _LOGGER.info("restore_credential: %r → %d dial(s)", identity_name, n)
+
     async def _send_invitation(call) -> None:
         """Send a touch-and-hold consent prompt to a dial.
 
@@ -2222,6 +2291,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         ("disable_alarm", _disable_alarm),
         ("snooze_alarm", _snooze_alarm),
         ("dismiss_alarm", _dismiss_alarm),
+        ("enroll_credential", _enroll_credential),
+        ("revoke_credential", _revoke_credential),
+        ("restore_credential", _restore_credential),
     ):
         if not hass.services.has_service(DOMAIN, _svc):
             hass.services.async_register(DOMAIN, _svc, _fn)
