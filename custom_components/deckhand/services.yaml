@@ -907,6 +907,149 @@ remove_menu_item:
       selector:
         text:
 
+create_alarm:
+  name: Create Alarm
+  description: >
+    Create or update (by name) a wake-up alarm on the targeted dials.
+    The Helm scheduler fires it: sunrise LED ramp, then ring; on-dial
+    snooze/dismiss gestures work as always and relay to the HA event
+    bus (alarm_snooze / alarm_dismiss).
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s). Multiple, Rooms, or "all" (YAML) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Alarm Name
+      description: The alarm's handle — reuse it to update/enable/disable.
+      required: true
+      example: "Wake Tyler"
+      selector:
+        text:
+    time:
+      name: Fire Time
+      description: Local fire time, 24h HH:MM.
+      required: true
+      example: "06:45"
+      selector:
+        time:
+    days:
+      name: Days of Week
+      description: >
+        List of weekday numbers (0=Mon .. 6=Sun). Empty/omitted = every
+        day (unless a one-time date is set).
+      example: "[0, 1, 2, 3, 4]"
+      selector:
+        object:
+    one_time_date:
+      name: One-Time Date
+      description: >
+        Fire once on this date (YYYY-MM-DD) then auto-disable — the
+        hotel/Airbnb "wake me tomorrow" shape.
+      example: "2026-08-01"
+      selector:
+        date:
+    label:
+      name: Ringing Label
+      description: Text on the ringing face (defaults to the alarm name).
+      example: "Rise and shine"
+      selector:
+        text:
+    snooze_minutes:
+      name: Snooze Minutes
+      default: 9
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+    sunrise_duration_s:
+      name: Sunrise Duration (seconds)
+      description: LED sunrise ramp length before the ring. 0 disables.
+      default: 900
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+    sunrise_color:
+      name: Sunrise Color
+      example: "#FFC66E"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      default: true
+      selector:
+        boolean:
+
+enable_alarm:
+  name: Enable Alarm
+  description: Re-enable a named alarm.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Alarm Name
+      required: true
+      example: "Wake Tyler"
+      selector:
+        text:
+
+disable_alarm:
+  name: Disable Alarm
+  description: >
+    Disable a named alarm without deleting it (vacation mode). Matches
+    the dial's own alarm first, then any team alarm with that name —
+    so HA can pause an operator-authored wake-up too.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Alarm Name
+      required: true
+      example: "Wake Tyler"
+      selector:
+        text:
+
+snooze_alarm:
+  name: Snooze Alarm
+  description: Snooze the actively ringing/sunrising alarm on the dial(s).
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+
+dismiss_alarm:
+  name: Dismiss Alarm
+  description: Dismiss the active alarm on the dial(s).
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+
 send_invitation:
   name: Send Invitation
   description: >

@@ -299,8 +299,6 @@ class SmokeYamlValidityTests(unittest.TestCase):
         self.assertRegex(v, r"^\d+\.\d+\.\d+$", "manifest version not semver")
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class FleetTargetingTests(unittest.TestCase):
@@ -378,3 +376,38 @@ class TemporaryMenuItemTests(unittest.TestCase):
         from pathlib import Path
         const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
         self.assertIn('TOPIC_MENU_REQUEST = "deckhand/{team_id}/dial/{dial_id}/menu_request"', const)
+
+
+class AlarmServicesTests(unittest.TestCase):
+    """Pin the alarm-service surface (2026-07-17, SF invocable parity)."""
+
+    REQUIRED = {
+        "create_alarm": frozenset({
+            "device_id", "name", "time", "days", "one_time_date", "label",
+            "snooze_minutes", "sunrise_duration_s", "sunrise_color", "enabled",
+        }),
+        "enable_alarm": frozenset({"device_id", "name"}),
+        "disable_alarm": frozenset({"device_id", "name"}),
+        "snooze_alarm": frozenset({"device_id"}),
+        "dismiss_alarm": frozenset({"device_id"}),
+    }
+
+    def test_services_declare_fields(self):
+        services = _load_services()
+        for svc, fields in self.REQUIRED.items():
+            self.assertIn(svc, services, f"{svc} missing")
+            declared = set((services[svc].get("fields") or {}).keys())
+            missing = fields - declared
+            self.assertFalse(missing, f"{svc} missing fields: {sorted(missing)}")
+
+    def test_handlers_registered(self):
+        src = _load_init_text()
+        for svc in self.REQUIRED:
+            self.assertIn(f'"{svc}"', src, f"{svc} not registered")
+
+    def test_alarm_request_topic_shape(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn('TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"', const)
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

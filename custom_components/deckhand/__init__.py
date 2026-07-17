@@ -36,6 +36,7 @@ from .const import (
     TOPIC_CMD_FACE_CONFIG,
     TOPIC_CMD_FACE_MOUNT,
     TOPIC_CMD_FACE_UNMOUNT,
+    TOPIC_ALARM_REQUEST,
     TOPIC_MENU_REQUEST,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
@@ -1986,6 +1987,82 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             await mqtt.async_publish(hass, topic, body, retain=False)
         _LOGGER.info("remove_menu_item: key=%s → %d dial(s)", key, len(targets))
 
+    async def _publish_alarm_request(call, payload: dict) -> int:
+        """Shared fan-out for the alarm services."""
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_ALARM_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        return len(targets)
+
+    async def _create_alarm(call) -> None:
+        """Create/update a wake-up alarm on the targeted dials (by name).
+
+        SF CreateAlarm parity. The Helm scheduler beat fires it (sunrise
+        ramp -> ring); snooze/dismiss gestures on the dial work as
+        always and relay back to the HA event bus.
+        """
+        await _require_admin(call)
+        name = (call.data.get("name") or "").strip()
+        fire_time = (call.data.get("time") or "").strip()
+        if not name or not fire_time:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        payload: dict[str, Any] = {"action": "create", "name": name, "time": fire_time}
+        if isinstance(call.data.get("days"), list):
+            payload["days"] = call.data["days"]
+        for k in ("one_time_date", "label", "sunrise_color"):
+            if call.data.get(k):
+                payload[k] = str(call.data[k])
+        for k in ("snooze_minutes", "sunrise_duration_s"):
+            if call.data.get(k) is not None:
+                payload[k] = int(call.data[k])
+        if call.data.get("enabled") is not None:
+            payload["enabled"] = bool(call.data["enabled"])
+        n = await _publish_alarm_request(call, payload)
+        _LOGGER.info("create_alarm: %r %s → %d dial(s)", name, fire_time, n)
+
+    async def _set_alarm_enabled(call, enabled: bool) -> None:
+        await _require_admin(call)
+        name = (call.data.get("name") or "").strip()
+        if not name:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        n = await _publish_alarm_request(
+            call, {"action": "enable" if enabled else "disable", "name": name}
+        )
+        _LOGGER.info("%s_alarm: %r → %d dial(s)", "enable" if enabled else "disable", name, n)
+
+    async def _enable_alarm(call) -> None:
+        """Re-enable a named alarm (SF parity: reverse of DisableAlarm)."""
+        await _set_alarm_enabled(call, True)
+
+    async def _disable_alarm(call) -> None:
+        """Disable a named alarm without deleting it (SF DisableAlarm parity)."""
+        await _set_alarm_enabled(call, False)
+
+    async def _snooze_alarm(call) -> None:
+        """Snooze the actively ringing/sunrising alarm (SF SnoozeAlarm parity)."""
+        await _require_admin(call)
+        n = await _publish_alarm_request(call, {"action": "snooze"})
+        _LOGGER.info("snooze_alarm → %d dial(s)", n)
+
+    async def _dismiss_alarm(call) -> None:
+        """Dismiss the active alarm (SF DismissAlarm parity)."""
+        await _require_admin(call)
+        n = await _publish_alarm_request(call, {"action": "dismiss"})
+        _LOGGER.info("dismiss_alarm → %d dial(s)", n)
+
     async def _send_invitation(call) -> None:
         """Send a touch-and-hold consent prompt to a dial.
 
@@ -2139,6 +2216,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "add_menu_item", _add_menu_item)
     if not hass.services.has_service(DOMAIN, "remove_menu_item"):
         hass.services.async_register(DOMAIN, "remove_menu_item", _remove_menu_item)
+    for _svc, _fn in (
+        ("create_alarm", _create_alarm),
+        ("enable_alarm", _enable_alarm),
+        ("disable_alarm", _disable_alarm),
+        ("snooze_alarm", _snooze_alarm),
+        ("dismiss_alarm", _dismiss_alarm),
+    ):
+        if not hass.services.has_service(DOMAIN, _svc):
+            hass.services.async_register(DOMAIN, _svc, _fn)
     if not hass.services.has_service(DOMAIN, "send_invitation"):
         hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
     if not hass.services.has_service(DOMAIN, "cancel_invitation"):
