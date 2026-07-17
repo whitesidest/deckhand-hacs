@@ -2179,26 +2179,74 @@ async def _fetch_announcement_image(
     return None
 
 
+def _resolve_all_dials(hass: HomeAssistant) -> list[tuple[str, str]]:
+    """Every discovered dial across every Deckhand config entry.
+
+    Drawn from the per-entry ``dials`` heartbeat cache, so it reflects
+    dials that have actually announced themselves — a decommissioned
+    dial ages out of the cache and stops receiving fleet-wide pushes.
+    """
+    out: list[tuple[str, str]] = []
+    for store in hass.data.get(DOMAIN, {}).values():
+        if not isinstance(store, dict):
+            continue
+        team_id = store.get("team_id")
+        if not team_id:
+            continue
+        for dial_id in (store.get("dials") or {}):
+            if dial_id:
+                out.append((dial_id, str(team_id)))
+    return out
+
+
 def _resolve_targets(
+    hass: HomeAssistant, device_id: str | list | None
+) -> list[tuple[str, str]]:
+    """Resolve service targeting input to (dial_id, team_id) tuples.
+
+    Accepted shapes (every service handler passes ``device_id`` through
+    here, so all of them gain these automatically):
+
+    * Bare dial device → single tuple.
+    * Room device (``group:{id}`` identifier) → every member dial from
+      the cached groups dict the MQTT subscriber populates.
+    * A LIST of devices (the selectors are ``multiple: true``) → the
+      deduplicated union of each entry's resolution.
+    * The literal string ``"all"`` (alone or in the list) → every
+      discovered dial across all Deckhand entries. Deliberately an
+      explicit sentinel, never the omitted-field default — forgetting
+      the field must not broadcast to the fleet.
+
+    Empty list if nothing resolves (unknown device, empty room, no
+    dials discovered yet). Handlers branch on that to raise
+    ServiceValidationError so HA shows a meaningful error rather than
+    silently no-op'ing.
+    """
+    if not device_id:
+        return []
+    ids = device_id if isinstance(device_id, list) else [device_id]
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(t: tuple[str, str]) -> None:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    for did in ids:
+        if isinstance(did, str) and did.strip().lower() == "all":
+            for t in _resolve_all_dials(hass):
+                _add(t)
+            continue
+        for t in _resolve_one_target(hass, did):
+            _add(t)
+    return out
+
+
+def _resolve_one_target(
     hass: HomeAssistant, device_id: str | None
 ) -> list[tuple[str, str]]:
-    """Resolve an HA device ID to one or more (dial_id, team_id) targets.
-
-    The HACS device selector accepts both individual dials and Rooms
-    (DialGroup) registered via the retained ``groups/list`` topic.
-    Service handlers want to fire one publish per dial regardless of
-    which kind the user picked, so this helper normalises both cases:
-
-    * Bare dial identifier (no ``group:`` prefix) → list with a single
-      tuple, exactly like :func:`_resolve_dial` returned previously.
-    * Group identifier (``group:{id}``) → list of every member dial
-      drawn from the cached groups dict the MQTT subscriber populates.
-
-    Empty list if the device is unknown, points at a missing room, or
-    points at a room with no member dials. The handler can branch on
-    that to raise ServiceValidationError so HA shows a meaningful error
-    rather than silently no-op'ing.
-    """
+    """Resolve a single HA device ID (dial or Room) — see _resolve_targets."""
     if not device_id:
         return []
     registry = dr.async_get(hass)

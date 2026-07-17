@@ -4,11 +4,13 @@ push_theme:
   fields:
     device_id:
       name: Device
-      description: The Deckhand dial device to push the theme to.
+      description: >
+        The Deckhand dial device(s) to push the theme to. You can pick several dials, a Room, or type the special id "all" (YAML mode) to target every dial.
       required: true
       selector:
         device:
           integration: deckhand
+          multiple: true
     theme:
       name: Theme
       description: >
@@ -48,11 +50,13 @@ send_announcement:
   fields:
     device_id:
       name: Device
-      description: The Deckhand dial device to send the announcement to.
+      description: >
+        The Deckhand dial device(s) to send the announcement to. You can pick several dials, a Room, or type the special id "all" (YAML mode) to target every dial.
       required: true
       selector:
         device:
           integration: deckhand
+          multiple: true
     message:
       name: Message
       description: The announcement message to display.
@@ -154,6 +158,7 @@ send_countdown:
       selector:
         device:
           integration: deckhand
+          multiple: true
     target_datetime:
       name: Target Moment
       description: When the countdown reaches zero (the celebration moment).
@@ -227,11 +232,13 @@ reboot:
   fields:
     device_id:
       name: Device
-      description: The Deckhand dial device to reboot.
+      description: >
+        The Deckhand dial device(s) to reboot. You can pick several dials, a Room, or type the special id "all" (YAML mode) to target every dial.
       required: true
       selector:
         device:
           integration: deckhand
+          multiple: true
 
 set_timezone:
   name: Set Timezone
@@ -250,6 +257,7 @@ set_timezone:
       selector:
         device:
           integration: deckhand
+          multiple: true
     timezone:
       name: IANA Timezone
       description: IANA name like "America/New_York" or "Europe/Paris".
@@ -312,6 +320,7 @@ apply_overlay:
       selector:
         device:
           integration: deckhand
+          multiple: true
     subtitle_mode:
       name: Subtitle mode
       description: >
@@ -495,6 +504,7 @@ update_now_playing:
       selector:
         device:
           integration: deckhand
+          multiple: true
     title:
       name: Track title
       description: Blank reverts the dial to its theme-default home face.
@@ -550,6 +560,7 @@ update_from_media_player:
       selector:
         device:
           integration: deckhand
+          multiple: true
     entity_id:
       name: Media Player
       description: The media_player entity to mirror.
@@ -572,6 +583,7 @@ update_sensor_value:
       selector:
         device:
           integration: deckhand
+          multiple: true
     entity_id:
       name: Source entity
       description: HA entity id this reading belongs to.
@@ -632,6 +644,7 @@ mount_perimeter_pulse:
       selector:
         device:
           integration: deckhand
+          multiple: true
     bindings:
       name: Bindings
       description: >
@@ -714,6 +727,7 @@ update_perimeter_state:
       selector:
         device:
           integration: deckhand
+          multiple: true
     states:
       name: Bindings to update
       description: >
@@ -745,6 +759,7 @@ mount_face:
       selector:
         device:
           integration: deckhand
+          multiple: true
     face_id:
       name: Face ID
       description: Face identifier registered in firmware.
@@ -782,6 +797,7 @@ unmount_face:
       selector:
         device:
           integration: deckhand
+          multiple: true
     face_id:
       name: Face ID
       description: Face identifier to unmount (matches the mount).
@@ -810,6 +826,7 @@ send_invitation:
       selector:
         device:
           integration: deckhand
+          multiple: true
     text:
       name: Prompt
       description: The question or invitation shown on the dial.
@@ -924,6 +941,7 @@ cancel_invitation:
       selector:
         device:
           integration: deckhand
+          multiple: true
     invitation_id:
       name: Invitation ID
       description: The same id supplied to ``send_invitation``.

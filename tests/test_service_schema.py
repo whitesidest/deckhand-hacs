@@ -70,7 +70,9 @@ APPLY_OVERLAY_FIELDS = frozenset({
     "sensor_quad_4_label",
     "sensor_marquee",
     "marquee_position",
-    "weather_entity_id",
+    # weather_entity_id removed 2026-06-06 with the Weather face (all
+    # surfaces); cmd/weather data plumbing survives for marquees only.
+    # Pin updated 2026-07-17 — intentional removal, not surface-shrink.
     "framecast_frame_id",
     "brightness",
     "hide_label",
@@ -299,3 +301,47 @@ class SmokeYamlValidityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FleetTargetingTests(unittest.TestCase):
+    """Pin the fleet-wide targeting surface (2026-07-17).
+
+    Every service resolves its device_id through _resolve_targets, which
+    accepts a list (selectors are multiple: true) and the literal "all"
+    sentinel for every discovered dial. Removing either is a breaking
+    change for user automations that broadcast to the fleet.
+    """
+
+    def test_every_device_selector_allows_multiple(self):
+        services = _load_services()
+        missing = []
+        for name, svc in services.items():
+            dev = (svc.get("fields") or {}).get("device_id") or {}
+            sel = (dev.get("selector") or {}).get("device")
+            if sel is None:
+                continue  # service without a deckhand device selector
+            if sel.get("integration") == "deckhand" and not sel.get("multiple"):
+                missing.append(name)
+        self.assertFalse(
+            missing,
+            f"device selectors missing multiple: true: {missing}",
+        )
+
+    def test_resolver_supports_all_sentinel_and_lists(self):
+        src = _load_init_text()
+        # The central resolver must normalise list input...
+        self.assertIn("isinstance(device_id, list)", src)
+        # ...and honor the explicit "all" sentinel (never omitted-field).
+        self.assertIn('== "all"', src)
+        self.assertIn("def _resolve_all_dials", src)
+
+    def test_all_sentinel_is_explicit_not_default(self):
+        # Omitted device_id must resolve to NOTHING — forgetting the field
+        # must never broadcast to the fleet.
+        src = _load_init_text()
+        m = re.search(
+            r"def _resolve_targets\(.*?\n(.*?)\n    ids =",
+            src, re.DOTALL,
+        )
+        self.assertIsNotNone(m, "_resolve_targets body not found")
+        self.assertIn("return []", m.group(1))
