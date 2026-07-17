@@ -806,6 +806,107 @@ unmount_face:
       selector:
         text:
 
+add_menu_item:
+  name: Add Menu Item (Temporary)
+  description: >
+    Add (or update, by key) a contextual menu item on the targeted dials.
+    Creates a real menu item on each dial's configured menu in Helm — it
+    shows in every layout, appears in the operator's menu editor, and
+    syncs to Salesforce. Selecting it on the dial fires a
+    deckhand_dial_event on the HA event bus, so pair this with an
+    automation that reacts to the press. With a TTL the item disappears
+    from the dials when the window closes and cleans itself up.
+    Examples: "Close Garage" while the door is open, "Movie Mode" for
+    the evening, "Dismiss" while the laundry is done.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        Dial(s) whose menu gets the item. You can pick several dials, a
+        Room, or type the special id "all" (YAML mode) for every dial.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    key:
+      name: Key
+      description: >
+        Your idempotency handle. Re-adding with the same key updates the
+        item in place; remove_menu_item deletes by this key. Also echoed
+        in the dial press event so automations can branch on it.
+      required: true
+      example: "garage_open"
+      selector:
+        text:
+    label:
+      name: Label
+      description: Menu label shown on the dial (ASCII, up to 64 chars).
+      required: true
+      example: "Close Garage"
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: Optional FontAwesome slug shown beside the label.
+      example: "fa-warehouse"
+      selector:
+        text:
+    ttl:
+      name: Time to live
+      description: >
+        Optional lifetime in seconds. When it elapses the item vanishes
+        from the dials (within a minute) and the row cleans itself up.
+        Omit for a sticky item you remove explicitly.
+      example: 3600
+      selector:
+        number:
+          min: 60
+          max: 86400
+          unit_of_measurement: seconds
+          mode: box
+    item_type:
+      name: Item Type (advanced)
+      description: >
+        Helm menu item type. Default ha_service — a simple button whose
+        press lands on the HA event bus. Other types (ha_toggle,
+        ha_light, ...) need matching action_data.
+      example: "ha_service"
+      selector:
+        text:
+    action_data:
+      name: Action Data (advanced)
+      description: >
+        Optional dict merged into the item's action_data (entity ids
+        etc. for directly-bound item types).
+      selector:
+        object:
+
+remove_menu_item:
+  name: Remove Menu Item (Temporary)
+  description: >
+    Remove a temporary menu item previously added with add_menu_item,
+    matched by key. Only HA-authored items are ever removed — the
+    operator's configured menu is untouched.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        Dial(s) to remove the item from. Multiple, Rooms, or "all"
+        (YAML mode) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    key:
+      name: Key
+      description: The key used when the item was added.
+      required: true
+      example: "garage_open"
+      selector:
+        text:
+
 send_invitation:
   name: Send Invitation
   description: >

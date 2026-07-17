@@ -36,6 +36,7 @@ from .const import (
     TOPIC_CMD_FACE_CONFIG,
     TOPIC_CMD_FACE_MOUNT,
     TOPIC_CMD_FACE_UNMOUNT,
+    TOPIC_MENU_REQUEST,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
     TOPIC_CMD_OVERLAY,
@@ -1914,6 +1915,77 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             await mqtt.async_publish(hass, mount_topic, "", retain=True)
         _LOGGER.info("unmount_face: %s → %d dial(s)", face_id, len(targets))
 
+    async def _add_menu_item(call) -> None:
+        """Add (or update) a temporary menu item on the targeted dials.
+
+        SF-parity path: Helm's listener creates a REAL MenuItem on each
+        dial's resolved menu profile (idempotent on ``key``), so the item
+        shows in every layout, appears in the operator UI, syncs onward
+        to Salesforce, and — with ``ttl`` — hides then deletes itself
+        via the shared availability machinery. Selecting the item fires
+        a ``deckhand_dial_event`` on HA's bus like any menu press, so
+        the item's ACTION is an HA automation listening for it (or set
+        item_type/action_data for a directly-bound HA action).
+        """
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        key = (call.data.get("key") or "").strip()
+        label = (call.data.get("label") or "").strip()
+        if not key or not label:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        payload: dict[str, Any] = {
+            "action": "add",
+            "key": key,
+            "label": label,
+            "icon": (call.data.get("icon") or "").strip(),
+        }
+        ttl = call.data.get("ttl")
+        if ttl:
+            payload["ttl_s"] = int(ttl)
+        if call.data.get("item_type"):
+            payload["item_type"] = str(call.data["item_type"]).strip()
+        if isinstance(call.data.get("action_data"), dict):
+            payload["action_data"] = call.data["action_data"]
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        _LOGGER.info(
+            "add_menu_item: key=%s label=%r ttl=%s → %d dial(s)",
+            key, label, ttl, len(targets),
+        )
+
+    async def _remove_menu_item(call) -> None:
+        """Remove a temporary menu item (by key) from the targeted dials."""
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        key = (call.data.get("key") or "").strip()
+        if not key:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        body = json.dumps({"action": "remove", "key": key})
+        for dial_id, team_id in targets:
+            topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        _LOGGER.info("remove_menu_item: key=%s → %d dial(s)", key, len(targets))
+
     async def _send_invitation(call) -> None:
         """Send a touch-and-hold consent prompt to a dial.
 
@@ -2063,6 +2135,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)
     if not hass.services.has_service(DOMAIN, "unmount_face"):
         hass.services.async_register(DOMAIN, "unmount_face", _unmount_face)
+    if not hass.services.has_service(DOMAIN, "add_menu_item"):
+        hass.services.async_register(DOMAIN, "add_menu_item", _add_menu_item)
+    if not hass.services.has_service(DOMAIN, "remove_menu_item"):
+        hass.services.async_register(DOMAIN, "remove_menu_item", _remove_menu_item)
     if not hass.services.has_service(DOMAIN, "send_invitation"):
         hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
     if not hass.services.has_service(DOMAIN, "cancel_invitation"):

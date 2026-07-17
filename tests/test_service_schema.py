@@ -345,3 +345,36 @@ class FleetTargetingTests(unittest.TestCase):
         )
         self.assertIsNotNone(m, "_resolve_targets body not found")
         self.assertIn("return []", m.group(1))
+
+
+class TemporaryMenuItemTests(unittest.TestCase):
+    """Pin the temporary-menu-item surface (2026-07-17, SF parity)."""
+
+    REQUIRED_FIELDS = {
+        "add_menu_item": frozenset({"device_id", "key", "label", "icon", "ttl", "item_type", "action_data"}),
+        "remove_menu_item": frozenset({"device_id", "key"}),
+    }
+
+    def test_services_declare_fields(self):
+        services = _load_services()
+        for svc, fields in self.REQUIRED_FIELDS.items():
+            self.assertIn(svc, services, f"{svc} missing from services.yaml")
+            declared = set((services[svc].get("fields") or {}).keys())
+            missing = fields - declared
+            self.assertFalse(missing, f"{svc} missing fields: {sorted(missing)}")
+
+    def test_handlers_read_fields(self):
+        src = _load_init_text()
+        for svc in self.REQUIRED_FIELDS:
+            self.assertIn(f'"{svc}"', src, f"{svc} not registered")
+        # add handler reads its optional knobs
+        for field in ("key", "label", "icon", "ttl", "item_type", "action_data"):
+            self.assertIn(f'call.data.get("{field}"', src.replace("call.data[\"item_type\"]", 'call.data.get("item_type"'),
+                          f"add_menu_item handler doesn't read {field}")
+
+    def test_menu_request_topic_shape(self):
+        # Helm's listener subscribes deckhand/+/dial/+/menu_request — the
+        # HACS topic template must match that shape exactly.
+        from pathlib import Path
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn('TOPIC_MENU_REQUEST = "deckhand/{team_id}/dial/{dial_id}/menu_request"', const)
