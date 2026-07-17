@@ -768,6 +768,28 @@ mount_face:
       selector:
         boolean:
 
+unmount_face:
+  name: Unmount Face
+  description: >
+    Dismiss the active face and return the dial to its theme's clock.
+    Also clears the retained mount so a broker reconnect doesn't
+    resurrect the dismissed face. Pair with mount_face for reactive
+    faces (e.g. the Charge face when an EV session ends).
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+    face_id:
+      name: Face ID
+      description: Face identifier to unmount (matches the mount).
+      required: true
+      example: "charge"
+      selector:
+        text:
+
 send_invitation:
   name: Send Invitation
   description: >

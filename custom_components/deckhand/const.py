@@ -50,6 +50,7 @@ TOPIC_SENSOR_WATCHES = "deckhand/{team_id}/dial/+/sensor_watches"
 TOPIC_CMD_FACE_MOUNT  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/mount"
 TOPIC_CMD_FACE_STATE  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/state"
 TOPIC_CMD_FACE_CONFIG = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/config"
+TOPIC_CMD_FACE_UNMOUNT = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/unmount"
 
 # Perimeter Pulse treatment names recognised by the firmware. Kept here so
 # the HACS service schema can validate without the user having to re-read

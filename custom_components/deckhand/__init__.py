@@ -35,6 +35,7 @@ from .const import (
     TOPIC_CMD_CONFIG,
     TOPIC_CMD_FACE_CONFIG,
     TOPIC_CMD_FACE_MOUNT,
+    TOPIC_CMD_FACE_UNMOUNT,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
     TOPIC_CMD_OVERLAY,
@@ -1875,6 +1876,44 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             face_id, len(targets), retained,
         )
 
+    async def _unmount_face(call) -> None:
+        """Dismiss the active face and restore the theme's clock.
+
+        Completes the reactive-face lifecycle (mount on event, dismiss
+        when done — e.g. the Charge face when the EV session ends).
+        Publishes ``cmd/face/<id>/unmount`` AND clears the retained
+        mount message: without the clear, the next broker (re)connect
+        would replay the stale retained mount and resurrect the face
+        the automation just dismissed.
+        """
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        face_id = (call.data.get("face_id") or "").strip()
+        if not face_id:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_face_id",
+            )
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        for dial_id, team_id in targets:
+            unmount_topic = TOPIC_CMD_FACE_UNMOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
+            )
+            mount_topic = TOPIC_CMD_FACE_MOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
+            )
+            await mqtt.async_publish(hass, unmount_topic, "{}", retain=False)
+            # Empty retained publish clears the stale mount (retained-
+            # lifecycle contract: state-driving cmd/* gets an empty-clear
+            # at lifecycle end).
+            await mqtt.async_publish(hass, mount_topic, "", retain=True)
+        _LOGGER.info("unmount_face: %s → %d dial(s)", face_id, len(targets))
+
     async def _send_invitation(call) -> None:
         """Send a touch-and-hold consent prompt to a dial.
 
@@ -2022,6 +2061,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
     if not hass.services.has_service(DOMAIN, "mount_face"):
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)
+    if not hass.services.has_service(DOMAIN, "unmount_face"):
+        hass.services.async_register(DOMAIN, "unmount_face", _unmount_face)
     if not hass.services.has_service(DOMAIN, "send_invitation"):
         hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
     if not hass.services.has_service(DOMAIN, "cancel_invitation"):
