@@ -436,5 +436,41 @@ class CredentialServicesTests(unittest.TestCase):
         self.assertIn('TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"', const)
 
 
+
+class ScheduleAndMenuPushTests(unittest.TestCase):
+    """Pin schedules + push_menu surface (2026-07-17, SF parity complete)."""
+
+    REQUIRED = {
+        "create_schedule": frozenset({
+            "device_id", "name", "trigger_type", "time", "days", "recurrence",
+            "one_time_date", "interval_hours", "minute_offset", "hour_start",
+            "hour_end", "webhook_slug", "theme", "menu_profile",
+            "announcement_message", "announcement_from",
+            "announcement_duration_s", "announcement_animation",
+            "target_scope", "enabled",
+        }),
+        "enable_schedule": frozenset({"device_id", "name"}),
+        "disable_schedule": frozenset({"device_id", "name"}),
+        "fire_schedule": frozenset({"device_id", "name"}),
+        "push_menu": frozenset({"device_id", "profile"}),
+    }
+
+    def test_services_declare_fields(self):
+        services = _load_services()
+        for svc, fields in self.REQUIRED.items():
+            self.assertIn(svc, services, f"{svc} missing")
+            declared = set((services[svc].get("fields") or {}).keys())
+            self.assertFalse(fields - declared, f"{svc} missing fields: {sorted(fields - declared)}")
+
+    def test_handlers_registered(self):
+        src = _load_init_text()
+        for svc in self.REQUIRED:
+            self.assertIn(f'"{svc}"', src, f"{svc} not registered")
+
+    def test_schedule_topic_shape(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn('TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"', const)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

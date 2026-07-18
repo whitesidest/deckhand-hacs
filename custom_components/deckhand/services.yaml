@@ -1132,6 +1132,205 @@ restore_credential:
       selector:
         text:
 
+create_schedule:
+  name: Create Schedule
+  description: >
+    Create or update (by name) a Helm schedule. When it fires it can
+    push a theme, switch the menu, and/or show an announcement.
+    Triggers: recurring time (with days), one-time date, HA webhook,
+    or sunset. Targets default to the addressed dial.
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s). Multiple, Rooms, or "all" (YAML) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Schedule Name
+      required: true
+      example: "Evening Scene"
+      selector:
+        text:
+    trigger_type:
+      name: Trigger
+      default: "time"
+      selector:
+        select:
+          options:
+            - "time"
+            - "one_time"
+            - "ha_webhook"
+            - "sunset"
+    time:
+      name: Fire Time
+      description: Local 24h HH:MM (time / one_time triggers).
+      example: "19:30"
+      selector:
+        time:
+    days:
+      name: Days of Week
+      description: List of weekday numbers (0=Mon .. 6=Sun). Empty = daily.
+      example: "[4, 5]"
+      selector:
+        object:
+    recurrence:
+      name: Recurrence
+      description: daily (default) or hourly (uses interval fields).
+      selector:
+        select:
+          options:
+            - "daily"
+            - "hourly"
+    one_time_date:
+      name: One-Time Date
+      example: "2026-08-02"
+      selector:
+        date:
+    interval_hours:
+      name: Every N Hours (hourly)
+      selector:
+        number:
+          min: 1
+          max: 24
+    minute_offset:
+      name: Minute Offset (hourly)
+      selector:
+        number:
+          min: 0
+          max: 59
+    hour_start:
+      name: Active From Hour (hourly)
+      selector:
+        number:
+          min: 0
+          max: 23
+    hour_end:
+      name: Active Until Hour (hourly)
+      selector:
+        number:
+          min: 0
+          max: 23
+    webhook_slug:
+      name: HA Webhook Slug (ha_webhook trigger)
+      selector:
+        text:
+    theme:
+      name: Theme Slug
+      description: Theme to push when the schedule fires.
+      example: "vesper"
+      selector:
+        text:
+    menu_profile:
+      name: Menu Profile Name
+      description: Menu to switch to when the schedule fires.
+      example: "Night Menu"
+      selector:
+        text:
+    announcement_message:
+      name: Announcement Message
+      selector:
+        text:
+    announcement_from:
+      name: Announcement From
+      selector:
+        text:
+    announcement_duration_s:
+      name: Announcement Duration (seconds)
+      selector:
+        number:
+          min: 0
+          max: 300
+    announcement_animation:
+      name: Announcement Animation
+      example: "sparkle"
+      selector:
+        text:
+    target_scope:
+      name: Target Scope (advanced)
+      description: Omit for the addressed dial; "all" for team-wide.
+      example: "all"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      default: true
+      selector:
+        boolean:
+
+enable_schedule:
+  name: Enable Schedule
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Schedule Name
+      required: true
+      selector:
+        text:
+
+disable_schedule:
+  name: Disable Schedule
+  description: Pause a named schedule without deleting it.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Schedule Name
+      required: true
+      selector:
+        text:
+
+fire_schedule:
+  name: Fire Schedule Now
+  description: Execute a named schedule immediately (test-fire).
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    name:
+      name: Schedule Name
+      required: true
+      selector:
+        text:
+
+push_menu:
+  name: Push Menu
+  description: >
+    Switch the dial(s) to a different menu profile by name. Transient —
+    the role-configured menu returns on the next auto-push (e.g. fresh
+    boot). "Party mode menu for the evening."
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    profile:
+      name: Menu Profile Name
+      required: true
+      example: "Party"
+      selector:
+        text:
+
 send_invitation:
   name: Send Invitation
   description: >

@@ -38,6 +38,7 @@ from .const import (
     TOPIC_CMD_FACE_UNMOUNT,
     TOPIC_ALARM_REQUEST,
     TOPIC_CREDENTIAL_REQUEST,
+    TOPIC_SCHEDULE_REQUEST,
     TOPIC_MENU_REQUEST,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
@@ -2132,6 +2133,97 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
         _LOGGER.info("restore_credential: %r → %d dial(s)", identity_name, n)
 
+    async def _publish_schedule_request(call, payload: dict) -> int:
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_SCHEDULE_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        return len(targets)
+
+    async def _create_schedule(call) -> None:
+        """Create/update a Helm schedule by name (SF CreateSchedule parity).
+
+        The schedule's payload can push a theme, a menu profile, and/or an
+        announcement when it fires. Targets default to the addressed dial;
+        pass target_scope: "all" for team-wide.
+        """
+        await _require_admin(call)
+        name = (call.data.get("name") or "").strip()
+        if not name:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        payload: dict[str, Any] = {"action": "create", "name": name}
+        for k in ("trigger_type", "time", "recurrence", "one_time_date", "webhook_slug",
+                  "theme", "menu_profile", "announcement_message", "announcement_from",
+                  "announcement_animation", "target_scope"):
+            if call.data.get(k):
+                payload[k] = str(call.data[k]).strip()
+        if isinstance(call.data.get("days"), list):
+            payload["days"] = call.data["days"]
+        for k in ("minute_offset", "interval_hours", "hour_start", "hour_end",
+                  "announcement_duration_s"):
+            if call.data.get(k) is not None:
+                payload[k] = int(call.data[k])
+        if call.data.get("enabled") is not None:
+            payload["enabled"] = bool(call.data["enabled"])
+        n = await _publish_schedule_request(call, payload)
+        _LOGGER.info("create_schedule: %r → %d dial(s)", name, n)
+
+    async def _schedule_by_name(call, action: str) -> None:
+        await _require_admin(call)
+        name = (call.data.get("name") or "").strip()
+        if not name:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        n = await _publish_schedule_request(call, {"action": action, "name": name})
+        _LOGGER.info("%s_schedule: %r → %d dial(s)", action, name, n)
+
+    async def _enable_schedule(call) -> None:
+        await _schedule_by_name(call, "enable")
+
+    async def _disable_schedule(call) -> None:
+        """SF DisableSchedule parity — pause without deleting."""
+        await _schedule_by_name(call, "disable")
+
+    async def _fire_schedule(call) -> None:
+        """Execute the named schedule right now (test-fire semantics)."""
+        await _schedule_by_name(call, "fire")
+
+    async def _push_menu(call) -> None:
+        """Switch the dial(s) to a different menu profile by name.
+
+        SF PushMenu parity. Transient by design — the role-resolved menu
+        returns on the next auto-flow push (fresh boot / role change).
+        """
+        await _require_admin(call)
+        profile = (call.data.get("profile") or "").strip()
+        if not profile:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_payload",
+            )
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        body = json.dumps({"action": "push", "profile": profile})
+        for dial_id, team_id in targets:
+            topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, retain=False)
+        _LOGGER.info("push_menu: %r → %d dial(s)", profile, len(targets))
+
     async def _send_invitation(call) -> None:
         """Send a touch-and-hold consent prompt to a dial.
 
@@ -2294,6 +2386,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         ("enroll_credential", _enroll_credential),
         ("revoke_credential", _revoke_credential),
         ("restore_credential", _restore_credential),
+        ("create_schedule", _create_schedule),
+        ("enable_schedule", _enable_schedule),
+        ("disable_schedule", _disable_schedule),
+        ("fire_schedule", _fire_schedule),
+        ("push_menu", _push_menu),
     ):
         if not hass.services.has_service(DOMAIN, _svc):
             hass.services.async_register(DOMAIN, _svc, _fn)
