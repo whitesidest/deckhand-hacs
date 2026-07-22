@@ -123,7 +123,7 @@ _OVERLAY_HOME_FACES = {
     "volume", "framecast",
 }
 _OVERLAY_QUAD_SLOTS = (2, 3, 4)
-_OVERLAY_MARQUEE_POSITIONS = {"subtitle", "ring"}
+_OVERLAY_MARQUEE_POSITIONS = {"subtitle"}  # "ring" removed 2026-07-22 (revisit at LVGL 9)
 
 _LOGGER = logging.getLogger(__name__)
 
