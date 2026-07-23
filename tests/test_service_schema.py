@@ -94,7 +94,7 @@ UPDATE_SENSOR_VALUE_FIELDS = frozenset({
 })
 
 SEND_INVITATION_FIELDS = frozenset({
-    "device_id", "text", "subtitle", "invitation_id",
+    "device_id", "all_dials", "text", "subtitle", "invitation_id",
     "accept_label", "decline_label", "hold_seconds", "ttl_s",
     "priority", "theme_override", "solid_color", "from_name", "on_accept",
 })
@@ -344,6 +344,102 @@ class FleetTargetingTests(unittest.TestCase):
         )
         self.assertIsNotNone(m, "_resolve_targets body not found")
         self.assertIn("return []", m.group(1))
+
+
+class InvitationMultiTargetTests(unittest.TestCase):
+    """Pin invitation multi-targeting (2026-07-23, Helm parity).
+
+    send_invitation accepts multiple devices (and Rooms via the device
+    selector) plus an ``all_dials`` boolean for fleet-wide prompts.
+    Invitations are per-dial consent prompts, so when ``invitation_id``
+    is omitted every targeted dial must get its OWN generated id — a
+    shared auto-id would let one guest's accept alias another dial's
+    pending prompt in downstream automations.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.services = _load_services()
+        cls.src = _load_init_text()
+
+    def test_device_selector_is_multiple_and_optional(self):
+        dev = self.services["send_invitation"]["fields"]["device_id"]
+        self.assertTrue(
+            (dev.get("selector") or {}).get("device", {}).get("multiple"),
+            "send_invitation device selector must be multiple: true",
+        )
+        # device_id may be omitted when all_dials is on — required: true
+        # would make the fleet-wide form unusable in the UI.
+        self.assertFalse(
+            dev.get("required"),
+            "device_id must not be required (all_dials can stand alone)",
+        )
+
+    def test_all_dials_is_boolean_defaulting_false(self):
+        field = self.services["send_invitation"]["fields"].get("all_dials")
+        self.assertIsNotNone(field, "all_dials field missing from services.yaml")
+        self.assertIn("boolean", field.get("selector") or {})
+        # Forgetting the field must never broadcast to the fleet.
+        self.assertFalse(field.get("default", False))
+
+    def test_handler_reads_all_dials_and_unions_fleet(self):
+        self.assertIn('call.data.get("all_dials")', self.src)
+        # The fleet resolver must be consulted by the invitation handler.
+        self.assertIn("_resolve_all_dials(hass)", self.src)
+
+    def test_invitation_id_generated_per_dial(self):
+        """The auto-id call must live INSIDE the per-target publish loop.
+
+        Structural (AST) rather than grep so a refactor that hoists
+        ``secrets.token_urlsafe`` back above the loop — reintroducing
+        the shared-id behavior — fails loudly.
+        """
+        import ast
+
+        tree = ast.parse(self.src)
+        fn = next(
+            (
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.AsyncFunctionDef)
+                and node.name == "_send_invitation"
+            ),
+            None,
+        )
+        self.assertIsNotNone(fn, "_send_invitation handler not found")
+
+        def calls_token_urlsafe(node) -> bool:
+            for sub in ast.walk(node):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "token_urlsafe"
+                ):
+                    return True
+            return False
+
+        in_loop = any(
+            calls_token_urlsafe(node)
+            for node in ast.walk(fn)
+            if isinstance(node, (ast.For, ast.AsyncFor))
+        )
+        self.assertTrue(
+            in_loop,
+            "secrets.token_urlsafe must be called inside the per-target "
+            "loop so each dial gets its own generated invitation_id",
+        )
+
+    def test_cancel_invitation_surface_unchanged(self):
+        """cancel_invitation keeps its shape — multiple devices, id required.
+
+        Per-dial generated ids don't break cancel: dials ignore cancel
+        payloads whose id they don't hold, so fanning one id out over
+        many dials is harmless.
+        """
+        fields = self.services["cancel_invitation"]["fields"]
+        self.assertTrue(fields["invitation_id"].get("required"))
+        self.assertTrue(
+            fields["device_id"]["selector"]["device"].get("multiple")
+        )
 
 
 class TemporaryMenuItemTests(unittest.TestCase):

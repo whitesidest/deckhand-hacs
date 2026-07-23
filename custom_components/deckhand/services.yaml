@@ -1400,17 +1400,29 @@ send_invitation:
     screen; declines by spinning the encoder. To run an automation on
     accept or decline, listen for a ``deckhand_dial_event`` with
     ``type: invitation_response`` and match on the ``invitation_id``
-    you supplied here (auto-generated if omitted, returned in the log
-    line).
+    you supplied here (auto-generated PER DIAL if omitted, returned
+    in the log line).
   fields:
     device_id:
-      name: Device
-      description: The Deckhand dial to invite.
-      required: true
+      name: Devices
+      description: >
+        The Deckhand dial(s) to invite. Pick several dials or a Room
+        device to fan out — each dial gets its own generated
+        invitation id unless you supply one explicitly. May be omitted
+        when ``all_dials`` is on.
+      required: false
       selector:
         device:
           integration: deckhand
           multiple: true
+    all_dials:
+      name: All dials
+      description: >
+        Send to every Deckhand dial this integration has discovered,
+        across all teams. Combines with any explicit device selection.
+      default: false
+      selector:
+        boolean:
     text:
       name: Prompt
       description: The question or invitation shown on the dial.
@@ -1429,7 +1441,9 @@ send_invitation:
       description: >
         Optional id echoed back in the response event. If you want one
         automation to react to a specific invitation, set this so you
-        can match in the trigger. Auto-generated if omitted.
+        can match in the trigger. When supplied it is used verbatim on
+        EVERY targeted dial (one cancel retracts everywhere); when
+        omitted each dial gets its own generated id.
       example: "invite-bar-open-1"
       selector:
         text:

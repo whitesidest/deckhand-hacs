@@ -2314,12 +2314,30 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         spin declines. Listen for ``deckhand_dial_event`` with
         ``type: "invitation_response"`` and ``payload.invitation_id``
         matching what you sent to wire automations on accept/decline.
+
+        Multi-targeting: the device selector accepts multiple dials
+        (and Room/group devices fan out via _resolve_targets), and
+        ``all_dials: true`` targets every discovered dial across all
+        Deckhand entries. When ``invitation_id`` is omitted, each dial
+        gets its OWN generated id — invitations are per-dial consent
+        prompts, so one guest accepting must not alias another dial's
+        pending prompt. An explicitly supplied ``invitation_id`` is
+        used verbatim on every target (the caller owns the lifecycle
+        and can retract everywhere with a single cancel_invitation).
         """
         import secrets
 
         await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
+        if call.data.get("all_dials"):
+            # Union, not replace — a group-resolved dial that hasn't
+            # heartbeated yet may be missing from the discovery cache.
+            seen = set(targets)
+            for t in _resolve_all_dials(hass):
+                if t not in seen:
+                    seen.add(t)
+                    targets.append(t)
         if not targets:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
@@ -2330,9 +2348,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if not text:
             raise ServiceValidationError("text is required")
 
-        invitation_id = (call.data.get("invitation_id") or "").strip()
-        if not invitation_id:
-            invitation_id = secrets.token_urlsafe(12)
+        # Explicit id → verbatim on every target. Omitted → generated
+        # per dial inside the publish loop below.
+        explicit_id = (call.data.get("invitation_id") or "").strip()
 
         try:
             hold_seconds = int(call.data.get("hold_seconds") or 5)
@@ -2351,7 +2369,6 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             priority = "normal"
 
         payload: dict[str, Any] = {
-            "invitation_id": invitation_id,
             "text": text[:240],
             "subtitle": str(call.data.get("subtitle") or "")[:120],
             "accept_label": str(call.data.get("accept_label") or "Hold to accept")[:64],
@@ -2379,15 +2396,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if isinstance(on_accept, dict) and on_accept:
             payload["on_accept"] = on_accept
 
-        body = json.dumps(payload)
+        sent_ids: list[str] = []
         for dial_id, team_id in targets:
+            invitation_id = explicit_id or secrets.token_urlsafe(12)
+            payload["invitation_id"] = invitation_id
+            sent_ids.append(f"{dial_id}={invitation_id}")
             topic = TOPIC_CMD_FACE_MOUNT.format(
                 team_id=team_id, dial_id=dial_id, face_id="invitation",
             )
-            await mqtt.async_publish(hass, topic, body)
+            await mqtt.async_publish(hass, topic, json.dumps(payload))
         _LOGGER.info(
-            "send_invitation: %s → %d dial(s) (id=%s)",
-            text[:40], len(targets), invitation_id,
+            "send_invitation: %s → %d dial(s) (%s)",
+            text[:40], len(targets), ", ".join(sent_ids),
         )
 
     async def _cancel_invitation(call) -> None:
