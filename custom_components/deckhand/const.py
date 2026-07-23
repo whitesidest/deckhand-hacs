@@ -32,6 +32,13 @@ TOPIC_CMD_ANNOUNCE = "deckhand/{team_id}/dial/{dial_id}/cmd/announce"
 # Firmware parses the fast-path in deckhand-firmware/src/network.h.
 TOPIC_CMD_IMAGE = "deckhand/{team_id}/dial/{dial_id}/cmd/image"
 TOPIC_CMD_OVERLAY = "deckhand/{team_id}/dial/{dial_id}/cmd/overlay"
+# cmd/sunset — anchors the Sundowner theme's clock-mode sun descent to a
+# REAL sunset epoch (vs the theme's manual "HH:MM" fallback). Home
+# Assistant is the natural source: sun.sun's next_setting attribute is an
+# ISO timestamp, far easier to hand off than a lat/long. Firmware's
+# INBOUND_SUNSET handler (deckhand-firmware/src/main.cpp) accepts
+# {"epoch": N} (also {"sunset_at": N}); 0/absent clears to manual.
+TOPIC_CMD_SUNSET = "deckhand/{team_id}/dial/{dial_id}/cmd/sunset"
 TOPIC_CMD_NOW_PLAYING = "deckhand/{team_id}/dial/{dial_id}/cmd/now_playing"
 TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
 

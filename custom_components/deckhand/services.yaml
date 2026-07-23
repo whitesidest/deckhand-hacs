@@ -301,6 +301,63 @@ set_timezone:
             - "Australia/Melbourne"
             - "Pacific/Auckland"
 
+set_sunset:
+  name: Set Sunset (Sundowner)
+  description: >
+    Anchor the Sundowner theme's clock mode to a real sunset. In clock
+    mode the on-dial sun descends toward the horizon and sinks at the
+    anchored sunset time instead of free-running on a loop. Provide the
+    sunset EITHER as an explicit timestamp (``sunset_at``) OR by reading
+    it from an entity (``entity_id``, e.g. ``sun.sun``) — Home Assistant
+    hands over a timestamp far more easily than a lat/long. One-shot:
+    ``sun.sun``'s next-setting rolls to tomorrow once today's sunset
+    passes, so call this daily from an automation (a Sun trigger or a
+    time pattern) to keep the anchor fresh. Only affects dials running
+    the Sundowner theme in clock mode; others ignore it.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        The Deckhand dial device(s) to anchor. You can pick several
+        dials, a Room, or type the special id "all" (YAML mode) to target
+        every dial.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    entity_id:
+      name: Sun entity
+      description: >
+        Entity to read the sunset from — normally ``sun.sun``. The
+        integration reads the ``attribute`` below (default
+        ``next_setting``) and converts it to a Unix epoch. Falls back to
+        the entity's own state if the attribute is absent, so a timestamp
+        sensor or an input_datetime works too. Ignored when ``sunset_at``
+        is supplied.
+      example: "sun.sun"
+      selector:
+        entity:
+    attribute:
+      name: Attribute
+      description: >
+        Which attribute on ``entity_id`` holds the sunset timestamp.
+        Defaults to ``next_setting`` (the standard ``sun.sun`` field).
+      default: "next_setting"
+      example: "next_setting"
+      selector:
+        text:
+    sunset_at:
+      name: Sunset time (explicit)
+      description: >
+        An explicit sunset as a Unix epoch (seconds), an ISO-8601
+        timestamp, or a datetime. Wins over ``entity_id`` when both are
+        given. Send ``0`` to clear the anchor and return the dial to the
+        theme's manual "HH:MM" fallback.
+      example: "2026-07-22T20:14:00-07:00"
+      selector:
+        text:
+
 apply_overlay:
   name: Apply Overlay
   description: >

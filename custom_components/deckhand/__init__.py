@@ -45,6 +45,7 @@ from .const import (
     TOPIC_CMD_OVERLAY,
     TOPIC_CMD_REBOOT,
     TOPIC_CMD_SENSOR_VALUE,
+    TOPIC_CMD_SUNSET,
     TOPIC_CMD_THEME,
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
@@ -1669,6 +1670,86 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             len(targets), iana, posix,
         )
 
+    async def _set_sunset(call) -> None:
+        """Push a real sunset anchor to the Sundowner theme (cmd/sunset).
+
+        Sundowner's clock mode sinks the on-dial sun to a *real* sunset
+        instead of free-running. The anchor is a Unix epoch; we accept it
+        two ways:
+
+        * ``sunset_at`` — an explicit epoch int, ``datetime``, or ISO-8601
+          string (what the operator typed / an automation computed).
+        * ``entity_id`` — an HA entity to read it off, pulling
+          ``attribute`` (default ``next_setting``, sun.sun's standard
+          next-sunset timestamp). The founder's call: HA can hand us a
+          timestamp far more easily than a lat/long.
+
+        Explicit ``sunset_at`` wins if both are supplied. Publishes
+        ``{"epoch": N}`` (the firmware also accepts ``sunset_at`` but
+        ``epoch`` is canonical). Pushing ``0`` clears the dial back to the
+        theme's manual "HH:MM" fallback.
+
+        One-shot, like every other write service. sun.sun's
+        ``next_setting`` advances to tomorrow's sunset once today's has
+        passed, so wire a daily HA automation (e.g. a Sun "sunrise"
+        trigger, or a time_pattern) that calls this to keep the anchor
+        fresh — the integration deliberately does not run its own
+        scheduler.
+        """
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        sunset_at = call.data.get("sunset_at")
+        entity_id = call.data.get("entity_id")
+        attribute = call.data.get("attribute") or "next_setting"
+
+        has_explicit = sunset_at not in (None, "")
+        if not has_explicit and not entity_id:
+            raise ServiceValidationError(
+                "Provide either sunset_at (an epoch / datetime / ISO "
+                "timestamp) or entity_id (e.g. sun.sun) to read the "
+                "sunset from."
+            )
+
+        if has_explicit:
+            epoch = _coerce_epoch(sunset_at)
+            if epoch is None:
+                raise ServiceValidationError(
+                    f"Could not parse sunset_at {sunset_at!r} as an epoch, "
+                    "datetime, or ISO-8601 timestamp."
+                )
+        else:
+            epoch = _sunset_epoch_from_entity(hass, entity_id, attribute)
+            if epoch is None:
+                raise ServiceValidationError(
+                    f"Entity {entity_id!r} has no readable '{attribute}' "
+                    "timestamp (expected an ISO-8601 / datetime value — "
+                    "sun.sun exposes next_setting)."
+                )
+
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            _LOGGER.warning(
+                "set_sunset: could not resolve device_id %s to any dial(s)", device_id
+            )
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        body = json.dumps({"epoch": epoch})
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_SUNSET.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+        try:
+            pretty = datetime.fromtimestamp(epoch).isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            pretty = "?"
+        _LOGGER.info(
+            "set_sunset: anchored %d dial(s) to epoch %s (%s)%s",
+            len(targets), epoch, pretty,
+            f" from {entity_id}.{attribute}" if not has_explicit else "",
+        )
+
     # ── Phase 6 dial-platform — face dispatch ────────────────────────
     # Faces are functional UI layers. Themes paint atmosphere, faces
     # paint the room's actual signal layer (perimeter ring, ritual
@@ -2361,6 +2442,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "update_sensor_value", _update_sensor_value)
     if not hass.services.has_service(DOMAIN, "set_timezone"):
         hass.services.async_register(DOMAIN, "set_timezone", _set_timezone)
+    if not hass.services.has_service(DOMAIN, "set_sunset"):
+        hass.services.async_register(DOMAIN, "set_sunset", _set_sunset)
     if not hass.services.has_service(DOMAIN, "mount_perimeter_pulse"):
         hass.services.async_register(
             DOMAIN, "mount_perimeter_pulse", _mount_perimeter_pulse
@@ -2398,6 +2481,59 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
     if not hass.services.has_service(DOMAIN, "cancel_invitation"):
         hass.services.async_register(DOMAIN, "cancel_invitation", _cancel_invitation)
+
+
+def _coerce_epoch(value: Any) -> int | None:
+    """Best-effort convert to Unix seconds (int).
+
+    Accepts a bare epoch (int/float or all-digit string), a ``datetime``
+    instance, or an ISO-8601 string. Naive datetimes/strings are
+    interpreted in local time (what an operator typing a wall-clock time
+    means); tz-aware values (e.g. sun.sun's UTC ``next_setting``) convert
+    correctly via ``timestamp()``. Returns ``None`` on anything
+    unparseable so callers can raise a clean validation error.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — reject it
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+        try:
+            # Python <3.11 fromisoformat chokes on a trailing 'Z'.
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return int(dt.timestamp())
+    return None
+
+
+def _sunset_epoch_from_entity(
+    hass: HomeAssistant, entity_id: str, attribute: str
+) -> int | None:
+    """Read a sunset timestamp off an HA entity and return a Unix epoch.
+
+    Prefers the named ``attribute`` (sun.sun exposes ``next_setting`` — a
+    tz-aware UTC datetime that is always the *upcoming* sunset). Falls
+    back to the entity's own state so a ``timestamp`` sensor or an
+    ``input_datetime`` whose value IS the sunset works too. Returns
+    ``None`` if nothing readable/parseable is present.
+    """
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    raw = state.attributes.get(attribute)
+    if raw in (None, ""):
+        raw = state.state
+    if raw in (None, "", "unknown", "unavailable"):
+        return None
+    return _coerce_epoch(raw)
 
 
 def _resolve_dial(

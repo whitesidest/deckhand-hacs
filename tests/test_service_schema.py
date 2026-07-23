@@ -114,6 +114,7 @@ REQUIRED_SERVICES = frozenset({
     "send_invitation",
     "cancel_invitation",
     "set_timezone",
+    "set_sunset",
     "update_now_playing",
     "update_sensor_value",
     "update_perimeter_state",
@@ -470,6 +471,98 @@ class ScheduleAndMenuPushTests(unittest.TestCase):
     def test_schedule_topic_shape(self):
         const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
         self.assertIn('TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"', const)
+
+
+class SetSunsetServiceTests(unittest.TestCase):
+    """Pin the Sundowner sunset-push surface (2026-07-22)."""
+
+    REQUIRED_FIELDS = frozenset({
+        "device_id", "entity_id", "attribute", "sunset_at",
+    })
+
+    def test_service_declares_fields(self):
+        services = _load_services()
+        self.assertIn("set_sunset", services, "set_sunset missing from services.yaml")
+        declared = set((services["set_sunset"].get("fields") or {}).keys())
+        missing = self.REQUIRED_FIELDS - declared
+        self.assertFalse(missing, f"set_sunset missing fields: {sorted(missing)}")
+
+    def test_handler_registered_and_reads_fields(self):
+        src = _load_init_text()
+        self.assertIn('"set_sunset"', src, "set_sunset not registered")
+        # Handler must actually read each knob or it's silently dropped.
+        for field in ("sunset_at", "entity_id", "attribute"):
+            self.assertIn(
+                f'call.data.get("{field}")', src,
+                f"set_sunset handler doesn't read {field}",
+            )
+
+    def test_topic_shape(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn(
+            'TOPIC_CMD_SUNSET = "deckhand/{team_id}/dial/{dial_id}/cmd/sunset"',
+            const,
+        )
+
+    def test_publishes_epoch_key(self):
+        # The firmware INBOUND_SUNSET handler keys on {"epoch": N}; make
+        # sure the handler emits that exact key (not just sunset_at).
+        src = _load_init_text()
+        self.assertIn('json.dumps({"epoch": epoch})', src)
+
+
+class EpochCoercionTests(unittest.TestCase):
+    """Unit-test the epoch conversion helper directly.
+
+    ``__init__.py`` can't be imported standalone (it uses package-
+    relative imports and pulls the whole homeassistant surface at load).
+    Rather than stub all of that, we lift the ``_coerce_epoch`` function
+    source out of the file via AST and exec just it — it depends only on
+    ``datetime`` and ``Any``. This keeps the actual shipped logic under
+    test without a running HA, and fails loudly if the function is
+    renamed or deleted.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        from datetime import datetime, timezone
+        from typing import Any
+
+        cls.datetime = datetime
+        cls.timezone = timezone
+
+        tree = ast.parse(_load_init_text())
+        fn = next(
+            (
+                node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_coerce_epoch"
+            ),
+            None,
+        )
+        assert fn is not None, "_coerce_epoch not found in __init__.py"
+        ns: dict = {"datetime": datetime, "Any": Any}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), INIT_PY.name, "exec"), ns)
+        cls._coerce_epoch = staticmethod(ns["_coerce_epoch"])
+
+    def test_coerce_epoch_variants(self):
+        f = self._coerce_epoch
+        # Bare epoch int and its string form.
+        self.assertEqual(f(1_753_000_000), 1_753_000_000)
+        self.assertEqual(f("1753000000"), 1_753_000_000)
+        self.assertEqual(f(1_753_000_000.9), 1_753_000_000)
+        # tz-aware ISO — the sun.sun shape — must be exact UTC epoch.
+        dt = self.datetime(2026, 7, 22, 20, 14, tzinfo=self.timezone.utc)
+        self.assertEqual(f("2026-07-22T20:14:00+00:00"), int(dt.timestamp()))
+        # Trailing Z tolerated.
+        self.assertEqual(f("2026-07-22T20:14:00Z"), int(dt.timestamp()))
+        # A real datetime instance.
+        self.assertEqual(f(dt), int(dt.timestamp()))
+        # Junk / empty / bool → None.
+        self.assertIsNone(f(""))
+        self.assertIsNone(f("not-a-time"))
+        self.assertIsNone(f(None))
+        self.assertIsNone(f(True))
 
 
 if __name__ == "__main__":
