@@ -661,5 +661,197 @@ class EpochCoercionTests(unittest.TestCase):
         self.assertIsNone(f(True))
 
 
+class PerimeterPulseParityTests(unittest.TestCase):
+    """Pin Perimeter Pulse parity with the fw 0.4.21 mount schema.
+
+    Canonical mount payload (cmd/face/perimeter_pulse/mount):
+    contiguous / bar_thickness (1-40) / bar_opacity (0-1) / bindings
+    (max 16). ``subtitle_text`` is DEAD as of fw 0.4.21 — the firmware
+    ignores it (the narrative line renders the dial's normal subtitle),
+    so the service must not advertise it. State updates go out on
+    cmd/face/perimeter_pulse/state keyed as ``bindings`` (canonical);
+    ``states`` survives firmware-side as a legacy alias only.
+    """
+
+    MOUNT_FIELDS = frozenset({
+        "device_id", "bindings", "contiguous", "bar_thickness", "bar_opacity",
+    })
+    UPDATE_FIELDS = frozenset({"device_id", "states"})
+
+    @classmethod
+    def setUpClass(cls):
+        cls.services = _load_services()
+        cls.src = _load_init_text()
+
+    def _fields(self, svc: str) -> dict:
+        return self.services[svc].get("fields") or {}
+
+    def test_mount_declares_canonical_fields(self):
+        declared = set(self._fields("mount_perimeter_pulse"))
+        missing = self.MOUNT_FIELDS - declared
+        self.assertFalse(missing, f"mount_perimeter_pulse missing: {sorted(missing)}")
+
+    def test_mount_does_not_advertise_subtitle_text(self):
+        # Dead field as of fw 0.4.21 — advertising it in the HA UI would
+        # promise behavior the dial no longer delivers.
+        self.assertNotIn(
+            "subtitle_text", self._fields("mount_perimeter_pulse"),
+            "subtitle_text is dead (fw 0.4.21) and must not be declared",
+        )
+
+    def test_mount_selector_ranges_match_firmware(self):
+        f = self._fields("mount_perimeter_pulse")
+        thick = f["bar_thickness"]["selector"]["number"]
+        self.assertEqual(thick.get("min"), 1)
+        self.assertEqual(thick.get("max"), 40)
+        self.assertEqual(f["bar_thickness"].get("default"), 7)
+        op = f["bar_opacity"]["selector"]["number"]
+        self.assertEqual(op.get("min"), 0)
+        self.assertEqual(op.get("max"), 1)
+        self.assertEqual(f["bar_opacity"].get("default"), 0.94)
+        self.assertIn("boolean", f["contiguous"]["selector"])
+        self.assertFalse(f["contiguous"].get("default", False))
+
+    def test_update_perimeter_state_fields(self):
+        declared = set(self._fields("update_perimeter_state"))
+        missing = self.UPDATE_FIELDS - declared
+        self.assertFalse(missing, f"update_perimeter_state missing: {sorted(missing)}")
+
+    def test_state_wire_payload_uses_canonical_bindings_key(self):
+        # fw 0.4.21 canonical: {"bindings":[{id, state[, value][, event]}]}
+        self.assertIn(
+            'json.dumps({"bindings": clean_states})', self.src,
+            "update_perimeter_state must publish the canonical 'bindings' "
+            "key, not the legacy 'states' alias",
+        )
+
+    def test_state_handler_supports_event_flag(self):
+        # event: true is the ripple/flash trigger — the key HA use case
+        # (motion trips -> transient pulse on the ring).
+        self.assertIn('entry.get("event")', self.src)
+
+    def _mount_fn_source(self) -> str:
+        import ast
+        tree = ast.parse(self.src)
+        fn = next(
+            (
+                n for n in ast.walk(tree)
+                if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "_mount_perimeter_pulse"
+            ),
+            None,
+        )
+        self.assertIsNotNone(fn, "_mount_perimeter_pulse handler not found")
+        return ast.get_source_segment(self.src, fn) or ""
+
+    def test_mount_handler_never_forwards_subtitle_text(self):
+        body = self._mount_fn_source()
+        self.assertNotRegex(
+            body, r'payload\[\s*["\']subtitle_text["\']\s*\]',
+            "mount handler must not write subtitle_text into the payload",
+        )
+        self.assertNotIn(
+            '("subtitle_text", "subtitle_text")', body,
+            "subtitle_text must not be in the mount pass-through fields",
+        )
+
+    def test_mount_handler_caps_bindings_at_firmware_max(self):
+        body = self._mount_fn_source()
+        self.assertIn(
+            "PERIMETER_MAX_BINDINGS", body,
+            "mount handler must truncate to the firmware binding cap",
+        )
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn("PERIMETER_MAX_BINDINGS = 16", const)
+
+    def test_treatments_pinned(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        for t in ("state_color", "ripple", "gradient", "flash", "sweep"):
+            self.assertIn(f'"{t}"', const, f"treatment '{t}' missing from const.py")
+
+    def test_translation_exceptions_cover_strings_json(self):
+        # ServiceValidationError keys raised by the PP handlers must
+        # resolve in translations/en.json, not render as raw keys.
+        import json as _json
+        base = ROOT / "custom_components" / "deckhand"
+        strings = _json.loads((base / "strings.json").read_text())
+        en = _json.loads((base / "translations" / "en.json").read_text())
+        missing = set(strings.get("exceptions", {})) - set(en.get("exceptions", {}))
+        self.assertFalse(missing, f"en.json missing exception strings: {sorted(missing)}")
+
+
+class PerimeterBindingShapingTests(unittest.TestCase):
+    """Behavioral test of the binding shaper, lifted via AST.
+
+    ``_build_perimeter_binding`` and ``_normalise_color`` are nested in
+    ``async_setup_entry`` (they close over nothing but module globals),
+    so we exec just those two function defs with stub globals — same
+    approach as EpochCoercionTests.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        import logging
+        from typing import Any
+
+        src = _load_init_text()
+        tree = ast.parse(src)
+        wanted = {"_build_perimeter_binding", "_normalise_color"}
+        fns = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name in wanted
+        ]
+        assert {f.name for f in fns} == wanted, "shaper functions not found"
+        ns: dict = {
+            "Any": Any,
+            "_LOGGER": logging.getLogger("test"),
+            "PERIMETER_TREATMENTS": (
+                "state_color", "ripple", "gradient", "flash", "sweep",
+            ),
+        }
+        exec(
+            compile(ast.Module(body=fns, type_ignores=[]), INIT_PY.name, "exec"),
+            ns,
+        )
+        cls.build = staticmethod(ns["_build_perimeter_binding"])
+
+    def test_id_required(self):
+        self.assertIsNone(self.build({}))
+        self.assertIsNone(self.build({"id": "  "}))
+        self.assertIsNone(self.build("not-a-dict"))
+
+    def test_minimal_binding_defaults(self):
+        out = self.build({"id": "front_door"})
+        self.assertEqual(out["id"], "front_door")
+        self.assertEqual(out["friendly_name"], "front_door")
+        self.assertEqual(out["treatment"], "state_color")
+        # angular_width omitted -> firmware default (24) applies on-dial.
+        self.assertNotIn("angular_width", out)
+        self.assertNotIn("active_state", out)  # firmware defaults "open"
+
+    def test_unknown_treatment_falls_back(self):
+        out = self.build({"id": "x", "treatment": "disco"})
+        self.assertEqual(out["treatment"], "state_color")
+
+    def test_color_normalisation(self):
+        out = self.build({
+            "id": "x", "base_color": "68C8D8", "active_color": "#E89858",
+        })
+        self.assertEqual(out["base_color"], "#68C8D8")
+        self.assertEqual(out["active_color"], "#E89858")
+        out = self.build({"id": "x", "base_color": "not-a-color"})
+        self.assertNotIn("base_color", out)
+
+    def test_value_clamped_to_unit_range(self):
+        self.assertEqual(self.build({"id": "x", "value": 1.7})["value"], 1.0)
+        self.assertEqual(self.build({"id": "x", "value": -3})["value"], 0.0)
+        self.assertAlmostEqual(self.build({"id": "x", "value": 0.62})["value"], 0.62)
+
+    def test_opacity_out_of_range_dropped(self):
+        self.assertNotIn("opacity", self.build({"id": "x", "opacity": 1.5}))
+        self.assertEqual(self.build({"id": "x", "opacity": 0.4})["opacity"], 0.4)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

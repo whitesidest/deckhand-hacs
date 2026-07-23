@@ -74,6 +74,10 @@ TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"
 # the HACS service schema can validate without the user having to re-read
 # the firmware source.
 PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
+# Firmware renders at most this many bindings (PP_MAX_BINDINGS in
+# face_perimeter_pulse.h) — extras are silently dropped on-dial, so the
+# integration truncates with a warning instead.
+PERIMETER_MAX_BINDINGS = 16
 
 # ── Doorbell / snapshot image push (cmd/image) ──────────────────────
 # Default dial resolution for image backdrops pushed from HACS. HACS

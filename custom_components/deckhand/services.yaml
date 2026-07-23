@@ -707,11 +707,14 @@ mount_perimeter_pulse:
     bindings:
       name: Bindings
       description: >
-        Array of { id, friendly_name, angular_center, angular_width,
-        treatment, state, active_state, base_color, active_color, value,
-        opacity }. See documentation. Treatments: state_color (locks /
-        doors), ripple (motion / doorbell), gradient (continuous value),
-        flash (alarms), sweep (ambient zone).
+        Array (max 16) of { id (required), friendly_name, angular_center
+        (degrees, 0 = 12 o'clock, clockwise), angular_width (degrees,
+        default 24, ignored when contiguous), treatment, state,
+        active_state (default "open"), base_color "#RRGGBB",
+        active_color "#RRGGBB", value (0-1, gradient position),
+        opacity (0-1, overrides bar_opacity) }. Treatments: state_color
+        (locks / doors), ripple (motion / doorbell), gradient
+        (continuous value), flash (alarms), sweep (ambient zone).
       required: true
       example: |
         - id: front_door
@@ -754,7 +757,7 @@ mount_perimeter_pulse:
     bar_opacity:
       name: Bar Opacity
       description: >
-        Face-level opacity 0-1. 1 = clear-as-day (default), lower values
+        Face-level opacity 0-1. Default 0.94 — clear-as-day; lower values
         let the theme breathe through. Per-binding opacity overrides if
         set on a binding.
       default: 0.94
@@ -763,14 +766,9 @@ mount_perimeter_pulse:
           min: 0
           max: 1
           step: 0.01
-    subtitle_text:
-      name: Subtitle
-      description: >
-        Optional text rendered under the perimeter when no binding is
-        active. Leave blank if you don't want a calm-state caption — the
-        dial hides the line entirely when this field is empty.
-      selector:
-        text:
+    # subtitle_text removed — DEAD as of firmware 0.4.21. The narrative
+    # line renders the dial's normal subtitle (apply_overlay machinery),
+    # so the face never contradicts the operator's subtitle.
 
 update_perimeter_state:
   name: Update Perimeter State
@@ -831,7 +829,7 @@ mount_face:
       description: Free-form dict — passed through to the face's on_mount.
       required: true
       example: |
-        subtitle_text: "Ready"
+        contiguous: true
         bindings: []
       selector:
         object:

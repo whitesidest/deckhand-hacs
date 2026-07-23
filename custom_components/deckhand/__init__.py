@@ -29,6 +29,7 @@ from .const import (
     MANUFACTURER,
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
+    PERIMETER_MAX_BINDINGS,
     PERIMETER_TREATMENTS,
     PLATFORMS,
     TOPIC_CMD_ANNOUNCE,
@@ -1802,7 +1803,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             out["active_color"] = ac
         if "value" in raw and raw["value"] is not None:
             try:
-                out["value"] = float(raw["value"])
+                # Gradient position — firmware treats it as 0-1.
+                out["value"] = min(max(float(raw["value"]), 0.0), 1.0)
             except (TypeError, ValueError):
                 pass
         if "opacity" in raw and raw["opacity"] is not None:
@@ -1851,20 +1853,46 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="invalid_bindings",
             )
+        if len(bindings) > PERIMETER_MAX_BINDINGS:
+            _LOGGER.warning(
+                "mount_perimeter_pulse: %d bindings supplied, firmware "
+                "renders at most %d — truncating",
+                len(bindings), PERIMETER_MAX_BINDINGS,
+            )
+            bindings = bindings[:PERIMETER_MAX_BINDINGS]
+
+        # subtitle_text is DEAD as of firmware 0.4.21 — the narrative line
+        # renders the dial's normal subtitle (cmd/overlay machinery) so the
+        # face never contradicts the operator's subtitle. Warn instead of
+        # silently swallowing it so old automations get a breadcrumb.
+        if call.data.get("subtitle_text"):
+            _LOGGER.warning(
+                "mount_perimeter_pulse: subtitle_text is ignored by "
+                "firmware >= 0.4.21 — use apply_overlay subtitle_mode/"
+                "subtitle_text instead",
+            )
 
         payload: dict[str, Any] = {
             "face_id": "perimeter_pulse",
             "schema_version": 1,
             "bindings": bindings,
         }
-        for src, dst in (
-            ("subtitle_text", "subtitle_text"),
-            ("contiguous", "contiguous"),
-            ("bar_thickness", "bar_thickness"),
-            ("bar_opacity", "bar_opacity"),
-        ):
-            if src in call.data and call.data[src] not in (None, ""):
-                payload[dst] = call.data[src]
+        if call.data.get("contiguous") is not None:
+            payload["contiguous"] = bool(call.data["contiguous"])
+        if call.data.get("bar_thickness") not in (None, ""):
+            try:
+                payload["bar_thickness"] = min(
+                    max(int(call.data["bar_thickness"]), 1), 40
+                )
+            except (TypeError, ValueError):
+                pass
+        if call.data.get("bar_opacity") not in (None, ""):
+            try:
+                payload["bar_opacity"] = min(
+                    max(float(call.data["bar_opacity"]), 0.0), 1.0
+                )
+            except (TypeError, ValueError):
+                pass
 
         await _publish_face_mount("perimeter_pulse", payload, targets, retained=True)
         _LOGGER.info(
@@ -1915,7 +1943,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_key="invalid_states",
             )
 
-        body = json.dumps({"states": clean_states})
+        # Canonical fw 0.4.21 state schema keys the array as "bindings"
+        # ("states"/"entities" survive firmware-side as legacy aliases).
+        body = json.dumps({"bindings": clean_states})
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_FACE_STATE.format(
                 team_id=team_id, dial_id=dial_id, face_id="perimeter_pulse",
