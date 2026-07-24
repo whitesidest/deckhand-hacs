@@ -97,6 +97,8 @@ SEND_INVITATION_FIELDS = frozenset({
     "device_id", "all_dials", "text", "subtitle", "invitation_id",
     "accept_label", "decline_label", "hold_seconds", "ttl_s",
     "priority", "theme_override", "solid_color", "from_name", "on_accept",
+    # Quiet (menu-presentation) invitations, helm#165 parity (2026-07-23).
+    "presentation", "menu_position",
 })
 
 CANCEL_INVITATION_FIELDS = frozenset({"device_id", "invitation_id"})
@@ -440,6 +442,268 @@ class InvitationMultiTargetTests(unittest.TestCase):
         self.assertTrue(
             fields["device_id"]["selector"]["device"].get("multiple")
         )
+
+
+class QuietInvitationTests(unittest.TestCase):
+    """Pin quiet (menu-presentation) invitations (2026-07-23, helm#165).
+
+    Two transports, one service:
+
+    * presentation="prompt" (default / omitted): the ORIGINAL direct
+      retained-style publish to ``cmd/face/invitation/mount`` — must
+      stay byte-for-byte so existing automations see zero change.
+    * presentation="menu": one non-retained publish per resolved dial
+      to Helm's ``invitation_request`` plane; Helm injects the
+      MenuItem server-side. Field names in the wire payload match
+      Helm's invitation API body (handle_invitation_request runs the
+      same parser).
+
+    The wire-shape tests lift the actual handlers out of __init__.py
+    via AST (same approach as EpochCoercionTests) and run them against
+    a recording MQTT stub — no Home Assistant required.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.services = _load_services()
+        cls.src = _load_init_text()
+
+    # ── schema pins ──────────────────────────────────────────────
+
+    def test_presentation_selector_options_and_default(self):
+        field = self.services["send_invitation"]["fields"].get("presentation")
+        self.assertIsNotNone(field, "presentation field missing")
+        options = field["selector"]["select"]["options"]
+        self.assertEqual(sorted(options), ["menu", "prompt"])
+        # Omitted/default MUST stay prompt — flipping the default would
+        # silently reroute every existing automation through Helm.
+        self.assertEqual(field.get("default"), "prompt")
+
+    def test_menu_position_is_optional_positive_number(self):
+        field = self.services["send_invitation"]["fields"].get("menu_position")
+        self.assertIsNotNone(field, "menu_position field missing")
+        self.assertFalse(field.get("required"), "menu_position must be optional")
+        self.assertEqual(field["selector"]["number"].get("min"), 1)
+
+    def test_invitation_request_topic_shape(self):
+        # Helm's listener subscribes deckhand/+/dial/+/invitation_request.
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn(
+            'TOPIC_INVITATION_REQUEST = '
+            '"deckhand/{team_id}/dial/{dial_id}/invitation_request"',
+            const,
+        )
+
+    def test_services_yaml_documents_helm_requirement(self):
+        # Quiet invitations need the Helm listener; pure-offline brokers
+        # drop them. That caveat must stay user-visible.
+        desc = self.services["send_invitation"].get("description") or ""
+        self.assertIn("Helm", desc)
+
+    # ── wire-shape harness ───────────────────────────────────────
+
+    def _run_handler(self, name: str, call_data: dict):
+        """Exec the named async handler with stubs; return publishes.
+
+        Each publish is recorded as (topic, payload_dict, retain) where
+        retain is the kwarg value or "<omitted>" when not passed —
+        letting the prompt-path pin assert the call signature did not
+        change (it historically omits retain).
+        """
+        import ast
+        import asyncio
+        import json as _json
+        import logging
+        from types import SimpleNamespace
+        from typing import Any
+
+        tree = ast.parse(self.src)
+        fn = next(
+            (
+                n for n in ast.walk(tree)
+                if isinstance(n, ast.AsyncFunctionDef) and n.name == name
+            ),
+            None,
+        )
+        self.assertIsNotNone(fn, f"{name} handler not found")
+
+        publishes: list[tuple] = []
+
+        class _Mqtt:
+            @staticmethod
+            async def async_publish(hass, topic, payload, retain="<omitted>"):
+                publishes.append((topic, _json.loads(payload), retain))
+
+        class _SVE(Exception):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args)
+
+        async def _noop_admin(call):
+            return None
+
+        targets = [("DECK-AAAA", "team-1"), ("DECK-BBBB", "team-1")]
+        ns: dict = {
+            "Any": Any,
+            "json": _json,
+            "mqtt": _Mqtt,
+            "hass": object(),
+            "DOMAIN": "deckhand",
+            "ServiceValidationError": _SVE,
+            "_LOGGER": logging.getLogger("test"),
+            "_require_admin": _noop_admin,
+            "_resolve_targets": lambda hass, device_id: list(targets),
+            "_resolve_all_dials": lambda hass: list(targets),
+            "TOPIC_CMD_FACE_MOUNT": (
+                "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/mount"
+            ),
+            "TOPIC_INVITATION_REQUEST": (
+                "deckhand/{team_id}/dial/{dial_id}/invitation_request"
+            ),
+        }
+        exec(
+            compile(ast.Module(body=[fn], type_ignores=[]), INIT_PY.name, "exec"),
+            ns,
+        )
+        call = SimpleNamespace(data=dict(call_data))
+        asyncio.run(ns[name](call))
+        return publishes
+
+    # ── prompt path: byte-for-byte unchanged ─────────────────────
+
+    def test_prompt_path_unchanged(self):
+        """Omitted presentation keeps the direct face-mount transport."""
+        pubs = self._run_handler(
+            "_send_invitation",
+            {"device_id": ["d1"], "text": "Open the bar?"},
+        )
+        self.assertEqual(len(pubs), 2)
+        ids = set()
+        for (topic, payload, retain) in pubs:
+            self.assertRegex(
+                topic,
+                r"^deckhand/team-1/dial/DECK-[AB]{4}/cmd/face/invitation/mount$",
+            )
+            # The historical call passes no retain kwarg — pin that.
+            self.assertEqual(retain, "<omitted>")
+            # Exact historical payload surface: no action/presentation
+            # keys may leak into the face-mount wire shape.
+            self.assertEqual(
+                set(payload),
+                {
+                    "text", "subtitle", "accept_label", "decline_label",
+                    "hold_seconds", "ttl_s", "priority", "invitation_id",
+                },
+            )
+            self.assertEqual(payload["text"], "Open the bar?")
+            self.assertEqual(payload["hold_seconds"], 5)
+            self.assertEqual(payload["ttl_s"], 600)
+            self.assertEqual(payload["priority"], "normal")
+            ids.add(payload["invitation_id"])
+        # Per-dial generated ids stay per-dial.
+        self.assertEqual(len(ids), 2)
+
+    def test_explicit_prompt_presentation_same_as_omitted(self):
+        pubs = self._run_handler(
+            "_send_invitation",
+            {"device_id": ["d1"], "text": "x", "presentation": "prompt"},
+        )
+        for (topic, _payload, _retain) in pubs:
+            self.assertIn("/cmd/face/invitation/mount", topic)
+
+    # ── menu path: request-plane wire shape ──────────────────────
+
+    def test_menu_path_publishes_invitation_request(self):
+        pubs = self._run_handler(
+            "_send_invitation",
+            {
+                "device_id": ["d1"],
+                "text": "Fresh cookies in the galley",
+                "presentation": "menu",
+                "menu_position": 2,
+                "ttl_s": 900,
+                "subtitle": "While they last",
+                "from_name": "Chef",
+                "on_accept": {"type": "fire_ha_service", "data": {"x": 1}},
+            },
+        )
+        self.assertEqual(len(pubs), 2, "one publish per resolved dial")
+        ids = set()
+        for (topic, payload, retain) in pubs:
+            self.assertRegex(
+                topic,
+                r"^deckhand/team-1/dial/DECK-[AB]{4}/invitation_request$",
+            )
+            self.assertIs(retain, False, "request-plane publish must be non-retained")
+            self.assertEqual(payload["action"], "send")
+            self.assertEqual(payload["presentation"], "menu")
+            self.assertEqual(payload["text"], "Fresh cookies in the galley")
+            self.assertEqual(payload["menu_position"], 2)
+            self.assertEqual(payload["ttl_s"], 900)
+            self.assertEqual(payload["subtitle"], "While they last")
+            self.assertEqual(payload["from_name"], "Chef")
+            self.assertEqual(
+                payload["on_accept"],
+                {"type": "fire_ha_service", "data": {"x": 1}},
+            )
+            ids.add(payload["invitation_id"])
+        # Omitted invitation_id → per-dial generated ids on the menu
+        # path too (per-dial consent, same as prompt).
+        self.assertEqual(len(ids), 2)
+
+    def test_menu_path_shared_explicit_id_and_position_omitted(self):
+        pubs = self._run_handler(
+            "_send_invitation",
+            {
+                "device_id": ["d1"],
+                "text": "x",
+                "presentation": "menu",
+                "invitation_id": "invite-shared-1",
+            },
+        )
+        for (_topic, payload, _retain) in pubs:
+            # Caller-supplied id is used verbatim on every target so a
+            # single cancel retracts everywhere.
+            self.assertEqual(payload["invitation_id"], "invite-shared-1")
+            # Omitted menu_position must be OMITTED on the wire (Helm
+            # treats missing as append-at-end), and empty optionals
+            # must not be sent as empty strings.
+            self.assertNotIn("menu_position", payload)
+            self.assertNotIn("subtitle", payload)
+            self.assertNotIn("from_name", payload)
+            self.assertNotIn("on_accept", payload)
+            # ttl_s defaults + clamps like the prompt path.
+            self.assertEqual(payload["ttl_s"], 600)
+
+    def test_menu_path_never_touches_face_mount_topic(self):
+        pubs = self._run_handler(
+            "_send_invitation",
+            {"device_id": ["d1"], "text": "x", "presentation": "menu"},
+        )
+        for (topic, _payload, _retain) in pubs:
+            self.assertNotIn("cmd/face", topic)
+
+    # ── cancel: dual publish ─────────────────────────────────────
+
+    def test_cancel_publishes_face_cancel_and_request_cancel(self):
+        pubs = self._run_handler(
+            "_cancel_invitation",
+            {"device_id": ["d1"], "invitation_id": "invite-shared-1"},
+        )
+        face = [p for p in pubs if "/cmd/face/invitation/cancel" in p[0]]
+        req = [p for p in pubs if p[0].endswith("/invitation_request")]
+        self.assertEqual(len(face), 2, "face cancel must remain, one per dial")
+        self.assertEqual(len(req), 2, "request-plane cancel, one per dial")
+        for (_t, payload, retain) in face:
+            # Historical face-cancel wire shape unchanged: id only, no
+            # action key, retain kwarg still omitted.
+            self.assertEqual(payload, {"invitation_id": "invite-shared-1"})
+            self.assertEqual(retain, "<omitted>")
+        for (_t, payload, retain) in req:
+            self.assertEqual(
+                payload,
+                {"action": "cancel", "invitation_id": "invite-shared-1"},
+            )
+            self.assertIs(retain, False)
 
 
 class TemporaryMenuItemTests(unittest.TestCase):

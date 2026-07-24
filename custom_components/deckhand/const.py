@@ -69,6 +69,12 @@ TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"
 TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"
 # Schedule lifecycle (create/enable/disable/fire) — Helm handle_schedule_request.
 TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"
+# Invitation lifecycle routed through Helm (handle_invitation_request).
+# Only quiet/menu invitations (helm#165) use this — Helm injects the
+# MenuItem server-side and fans out per menu profile. Prompt invitations
+# keep the direct cmd/face/invitation/mount publish (broker-only, no
+# Helm required).
+TOPIC_INVITATION_REQUEST = "deckhand/{team_id}/dial/{dial_id}/invitation_request"
 
 # Perimeter Pulse treatment names recognised by the firmware. Kept here so
 # the HACS service schema can validate without the user having to re-read

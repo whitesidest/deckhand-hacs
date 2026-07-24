@@ -41,6 +41,7 @@ from .const import (
     TOPIC_CREDENTIAL_REQUEST,
     TOPIC_SCHEDULE_REQUEST,
     TOPIC_MENU_REQUEST,
+    TOPIC_INVITATION_REQUEST,
     TOPIC_CMD_FACE_STATE,
     TOPIC_CMD_NOW_PLAYING,
     TOPIC_CMD_OVERLAY,
@@ -2354,6 +2355,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         pending prompt. An explicitly supplied ``invitation_id`` is
         used verbatim on every target (the caller owns the lifecycle
         and can retract everywhere with a single cancel_invitation).
+
+        presentation="menu" (helm#165) is the quiet path: instead of a
+        prompt, the invitation appears as a menu item and selecting it
+        accepts. That transport goes via the Helm invitation_request
+        plane (see the branch below), not the direct face mount.
         """
         import secrets
 
@@ -2381,6 +2387,78 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # Explicit id → verbatim on every target. Omitted → generated
         # per dial inside the publish loop below.
         explicit_id = (call.data.get("invitation_id") or "").strip()
+
+        presentation = (call.data.get("presentation") or "prompt").strip().lower()
+        if presentation not in ("prompt", "menu"):
+            raise ServiceValidationError(
+                'presentation must be "prompt" or "menu"'
+            )
+
+        if presentation == "menu":
+            # Quiet invitation (helm#165): a menu item instead of a
+            # screen-taking prompt. The direct face-mount transport
+            # cannot do this — Helm injects the MenuItem server-side
+            # into each dial's resolved menu profile — so this routes
+            # through the invitation_request plane (non-retained, one
+            # publish per dial; field names match Helm's invitation
+            # API body, parsed by handle_invitation_request). Requires
+            # the Helm MQTT listener on the broker; pure-offline
+            # brokers silently drop it. Dials sharing a menu profile
+            # all see the item; selecting it accepts.
+            menu_position = None
+            raw_pos = call.data.get("menu_position")
+            if raw_pos is not None and str(raw_pos).strip() != "":
+                try:
+                    menu_position = int(raw_pos)
+                except (TypeError, ValueError) as exc:
+                    raise ServiceValidationError(
+                        "menu_position must be a positive integer"
+                    ) from exc
+                if menu_position < 1:
+                    raise ServiceValidationError(
+                        "menu_position must be a positive integer"
+                    )
+
+            try:
+                menu_ttl_s = int(call.data.get("ttl_s") or 600)
+            except (TypeError, ValueError) as exc:
+                raise ServiceValidationError("ttl_s must be an integer") from exc
+            menu_ttl_s = max(10, min(86400, menu_ttl_s))
+
+            request: dict[str, Any] = {
+                "action": "send",
+                "presentation": "menu",
+                "text": text[:240],
+                "ttl_s": menu_ttl_s,
+            }
+            if menu_position is not None:
+                request["menu_position"] = menu_position
+            menu_subtitle = str(call.data.get("subtitle") or "").strip()
+            if menu_subtitle:
+                request["subtitle"] = menu_subtitle[:120]
+            menu_from = (call.data.get("from_name") or "").strip()
+            if menu_from:
+                request["from_name"] = menu_from[:64]
+            menu_on_accept = call.data.get("on_accept")
+            if isinstance(menu_on_accept, dict) and menu_on_accept:
+                request["on_accept"] = menu_on_accept
+
+            sent_ids = []
+            for dial_id, team_id in targets:
+                invitation_id = explicit_id or secrets.token_urlsafe(12)
+                request["invitation_id"] = invitation_id
+                sent_ids.append(f"{dial_id}={invitation_id}")
+                topic = TOPIC_INVITATION_REQUEST.format(
+                    team_id=team_id, dial_id=dial_id,
+                )
+                await mqtt.async_publish(
+                    hass, topic, json.dumps(request), retain=False
+                )
+            _LOGGER.info(
+                "send_invitation (menu): %s → %d dial(s) (%s)",
+                text[:40], len(targets), ", ".join(sent_ids),
+            )
+            return
 
         try:
             hold_seconds = int(call.data.get("hold_seconds") or 5)
@@ -2446,6 +2524,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         Publishes ``cmd/face/invitation/cancel``. If the invitation was
         still pending in the queue or actively displayed, the dial
         emits a response event with ``response: "cancelled"``.
+
+        Also publishes ``{"action": "cancel", ...}`` to the Helm
+        ``invitation_request`` plane so quiet (menu-presentation)
+        invitations get retracted server-side — Helm removes the
+        MenuItem and republishes the menu. Both publishes are harmless
+        where they don't apply: dials ignore cancels for ids they
+        don't hold, and Helm ignores unknown ids (on brokers without
+        the Helm listener the request-plane publish is simply
+        dropped).
         """
         await _require_admin(call)
         device_id = call.data.get("device_id")
@@ -2461,11 +2548,20 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             raise ServiceValidationError("invitation_id is required")
 
         body = json.dumps({"invitation_id": invitation_id})
+        request_body = json.dumps(
+            {"action": "cancel", "invitation_id": invitation_id}
+        )
         for dial_id, team_id in targets:
             topic = (
                 f"deckhand/{team_id}/dial/{dial_id}/cmd/face/invitation/cancel"
             )
             await mqtt.async_publish(hass, topic, body)
+            await mqtt.async_publish(
+                hass,
+                TOPIC_INVITATION_REQUEST.format(team_id=team_id, dial_id=dial_id),
+                request_body,
+                retain=False,
+            )
         _LOGGER.info(
             "cancel_invitation: %s → %d dial(s)",
             invitation_id, len(targets),

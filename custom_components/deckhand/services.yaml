@@ -1400,6 +1400,16 @@ send_invitation:
     ``type: invitation_response`` and match on the ``invitation_id``
     you supplied here (auto-generated PER DIAL if omitted, returned
     in the log line).
+
+    Quiet mode: set ``presentation: menu`` and the invitation appears
+    as an item in the dial's menu instead of taking the screen —
+    selecting the item accepts. Because Helm injects the menu item
+    server-side, dials sharing a menu profile all see it, and the
+    hold/decline/theme fields below do not apply. Quiet invitations
+    require the Helm MQTT listener on your broker (they ride the
+    ``invitation_request`` plane); on a pure-offline / Console-only
+    broker they are silently dropped — use the default ``prompt``
+    presentation there.
   fields:
     device_id:
       name: Devices
@@ -1428,6 +1438,31 @@ send_invitation:
       example: "Stewards: open the bar?"
       selector:
         text:
+    presentation:
+      name: Presentation
+      description: >
+        ``prompt`` (default) takes the screen with the touch-and-hold
+        card. ``menu`` is the quiet path — the invitation becomes a
+        selectable item in the dial's menu (selecting accepts), routed
+        through Helm so every dial sharing the menu profile sees it.
+        ``menu`` requires the Helm MQTT listener on the broker.
+      default: prompt
+      selector:
+        select:
+          options:
+            - prompt
+            - menu
+    menu_position:
+      name: Menu position
+      description: >
+        Quiet (``menu``) presentation only — 1-based position for the
+        invitation item in the menu. Omit to append at the end.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 64
+          mode: box
     subtitle:
       name: Subtitle
       description: Smaller line under the prompt. Optional.
@@ -1528,7 +1563,10 @@ cancel_invitation:
   description: >
     Retract a pending or displayed invitation by id. If the dial was
     showing it, the dial emits an ``invitation_response`` with
-    ``response: "cancelled"``.
+    ``response: "cancelled"``. Covers both presentations: the direct
+    face cancel handles prompt invitations, and a parallel publish on
+    the Helm ``invitation_request`` plane retracts quiet (menu)
+    invitations server-side.
   fields:
     device_id:
       name: Device
