@@ -114,6 +114,79 @@ automation:
           entity_id: light.living_room
 ```
 
+## NFC taps in automations
+
+When a card is tapped on a dial's NFC reader, a `deckhand_dial_event`
+lands on the HA bus **twice**, via two independent paths:
+
+1. **Helm-enriched relay (canonical).** Helm resolves the card against
+   its credential store, then relays the enriched event to HA. This is
+   the event to use for anything identity-aware — it is the only one
+   that knows *who* tapped.
+2. **Raw MQTT re-fire.** This integration also re-fires the dial's raw
+   MQTT event directly. It carries no identity — fine for "any tap
+   happened" automations, but it cannot branch on identity.
+
+**How to tell them apart:** the enriched payload carries an `action`
+key; the raw one does not. Blueprints and automations that match
+`event_data: { event_type: nfc_tap, action: ... }` will therefore only
+ever fire on the enriched event — no double-trigger.
+
+### Enriched event contract
+
+`event_type: deckhand_dial_event`, with `data`:
+
+| Key | Value |
+|---|---|
+| `dial_id` | which dial was tapped |
+| `team_slug` | your team |
+| `event_type` | `"nfc_tap"` — branch on this |
+| `action` | `"known"` \| `"unknown"` \| `"revoked"` — branch on this |
+| `item_id` | identity id, or `""` if unknown |
+| `item_label` | identity display name, or `"unknown"` |
+| `role` | role name, or `""` |
+| `credential_id` | stable credential id, or `""` |
+
+`uid_hash` is **never** present on the HA relay — it is a stable
+pseudo-identifier (even for unknown cards) and stays in Helm for
+enrollment and audit only.
+
+**Rate limit:** the enriched relay is limited to **12 taps/min per
+dial** and **60 taps/min per team**. Taps beyond the limit are not
+relayed to HA (a spoofed-card storm can't hammer your instance), but
+Helm's audit log records every tap regardless.
+
+### Shipped blueprints
+
+Ready-made automations live in
+[`blueprints/automation/deckhand/`](blueprints/automation/deckhand/):
+
+- `nfc_known_tap_scene.yaml` — known tap (optionally filtered by role) runs a scene
+- `nfc_unknown_tap_alert.yaml` — unknown tap during a time window sends a notification
+- `nfc_revoked_tap_alert.yaml` — revoked-card tap always sends a notification
+
+### Example: known tap by a Housekeeper runs a scene
+
+```yaml
+automation:
+  - alias: "Housekeeper tap starts service mode"
+    trigger:
+      - platform: event
+        event_type: deckhand_dial_event
+        event_data:
+          event_type: "nfc_tap"
+          action: "known"
+          role: "Housekeeper"
+    action:
+      - service: scene.turn_on
+        target:
+          entity_id: scene.in_service
+```
+
+A tap is *identification*, not authentication of intent — wire taps to
+signals and scenes, and keep anything irreversible behind an HA-side
+confirmation you own.
+
 ## Example Automation
 
 Push a "night mode" theme to all dials at sunset:
