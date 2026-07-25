@@ -51,6 +51,8 @@ from .const import (
     TOPIC_CMD_THEME,
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
+    TOPIC_THEME_REQUEST,
+    SERVER_RESOLVED_THEMES,
 )
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
@@ -1089,6 +1091,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # DialThemeConfig. For persistence across reboots, set the options
         # in the Helm UI (Gallery → push modal).
         theme_options = call.data.get("theme_options")
+
+        # Server-resolved selections ("random") can't be resolved by the
+        # dial — route via theme_request so Helm picks an activated theme
+        # per dial (excluding its current one) and pushes the concrete
+        # cmd/theme itself. theme_options don't apply to a random pick.
+        if theme.strip() in SERVER_RESOLVED_THEMES:
+            body = json.dumps({"slug": theme.strip()})
+            for dial_id, team_id in targets:
+                topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=dial_id)
+                await mqtt.async_publish(hass, topic, body)
+            return
+
         payload: dict[str, Any] = {"id": theme}
         if isinstance(theme_options, dict) and theme_options:
             payload["config"] = {

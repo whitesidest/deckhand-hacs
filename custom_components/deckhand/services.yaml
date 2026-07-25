@@ -21,6 +21,9 @@ push_theme:
         ignored. The Theme **entity** in HA (one per dial) shows the
         team's live theme catalog pulled from the retained
         ``themes/list`` MQTT topic, so use that for picking by name.
+        Special value ``random`` lets the server pick a random activated
+        theme for each dial (excluding its current one) — a new look
+        every time.
       required: true
       example: "elysian"
       selector:

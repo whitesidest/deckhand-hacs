@@ -75,6 +75,16 @@ TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"
 # keep the direct cmd/face/invitation/mount publish (broker-only, no
 # Helm required).
 TOPIC_INVITATION_REQUEST = "deckhand/{team_id}/dial/{dial_id}/invitation_request"
+# Theme selections that need SERVER-side resolution — today just the
+# "random" sentinel (Helm picks a random activated theme, excluding the
+# dial's current one, then pushes the concrete cmd/theme). Consumed by
+# Helm's MQTT listener (handle_theme_request). Concrete slugs keep the
+# direct cmd/theme publish — firmware resolves those locally.
+TOPIC_THEME_REQUEST = "deckhand/{team_id}/dial/{dial_id}/theme_request"
+
+# Theme selections the dial can't resolve locally — routed via
+# TOPIC_THEME_REQUEST instead of the direct cmd/theme publish.
+SERVER_RESOLVED_THEMES = ("random",)
 
 # Perimeter Pulse treatment names recognised by the firmware. Kept here so
 # the HACS service schema can validate without the user having to re-read
