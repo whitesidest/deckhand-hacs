@@ -19,6 +19,33 @@ import re
 # Live" from being mistaken for a channel string.
 _PROVIDER_SUFFIX = re.compile(r"^(?P<body>.+?)\s*-\s*(?P<prov>[a-z][a-z0-9]{1,20})$")
 
+# HA MediaPlayerEntityFeature bits — the transport verbs the dial can
+# conditionally expose on the Now-Playing face (so it subsumes the old
+# dedicated media-control face). Only advertise a control the entity
+# actually supports.
+_FEAT_PREVIOUS_TRACK = 16
+_FEAT_NEXT_TRACK = 32
+
+
+def now_playing_capabilities(attr: dict) -> dict:
+    """Return the transport capabilities to advertise to the dial.
+
+    Reads ``supported_features`` and returns only the keys that are True
+    (``can_next`` / ``can_prev``) so the firmware defaults them off when a
+    player can't skip — the dial then shows a plain Now-Playing view with
+    no next affordance, which is what makes it a superset of the old media
+    face.
+    """
+    sf = attr.get("supported_features")
+    if not isinstance(sf, int):
+        return {}
+    caps: dict = {}
+    if sf & _FEAT_NEXT_TRACK:
+        caps["can_next"] = True
+    if sf & _FEAT_PREVIOUS_TRACK:
+        caps["can_prev"] = True
+    return caps
+
 
 def now_playing_fields(attr: dict, entity_id: str) -> dict:
     """Return ``{"title", "artist", "source"}`` for a media_player state.
