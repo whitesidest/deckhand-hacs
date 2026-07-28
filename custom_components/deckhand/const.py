@@ -51,6 +51,15 @@ TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
 # — drop any listeners we registered for it.
 TOPIC_SENSOR_WATCHES = "deckhand/{team_id}/dial/+/sensor_watches"
 
+# hacs/presence: retained per-team executor-arbitration beacon (R1). HACS
+# publishes {online, ts, interval_s, version, entry_id, owns:[...]} here on
+# startup and every PRESENCE_INTERVAL_S, and an empty retained payload on
+# graceful unload. Helm + Console subscribe to deckhand/+/hacs/presence and
+# DEFER the domains listed in ``owns`` while the beacon is fresh, so a dial
+# action HACS owns (media_player today) isn't double-executed server-side.
+# NOT per-dial — one beacon per team/entry.
+TOPIC_HACS_PRESENCE = "deckhand/{team_id}/hacs/presence"
+
 # Phase 6 dial-platform — face dispatch topics. {face_id} is the
 # face identifier (e.g. "perimeter_pulse") chosen by the firmware
 # face registry.
