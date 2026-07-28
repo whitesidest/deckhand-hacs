@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components import mqtt
@@ -13,7 +13,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError, Unauthorized
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 try:  # get_url is in core since 2021 but guard for older installs
     from homeassistant.helpers.network import NoURLAvailableError, get_url
@@ -50,6 +53,7 @@ from .const import (
     TOPIC_CMD_SENSOR_VALUE,
     TOPIC_CMD_SUNSET,
     TOPIC_CMD_THEME,
+    TOPIC_HACS_PRESENCE,
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
     TOPIC_THEME_REQUEST,
@@ -61,6 +65,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 from .image_push import publish_image_to_dial
 from ._media_control import media_service_for_dial_event
 from ._now_playing import now_playing_capabilities, now_playing_fields
+from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
 
 
 def _dispatch_dial_media_control(hass: HomeAssistant, envelope: dict) -> None:
@@ -615,11 +620,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
     _reload_media_player_listeners(hass, entry)
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
+    # ── R1: executor-arbitration presence beacon ─────────────────────
+    # Publish a retained per-team heartbeat advertising the domains this
+    # HACS build actuates locally (``_presence.PRESENCE_OWNS`` — media_player
+    # today). Helm/Console DEFER those domains while the beacon is fresh so
+    # a media tap isn't double-executed (server-side AND in-HA). Seed it
+    # immediately (a running Helm/Console defers on the next event), then
+    # re-stamp every PRESENCE_INTERVAL_S. Retained + embedded wall-clock
+    # ``ts`` makes staleness detectable across listener restarts. Graceful
+    # ``async_unload_entry`` empty-clears it for instant server resume.
+    presence_topic = TOPIC_HACS_PRESENCE.format(team_id=team_id)
+
+    async def _publish_presence(_now: datetime | None = None) -> None:
+        payload = build_presence_payload(entry.entry_id)
+        await mqtt.async_publish(
+            hass, presence_topic, json.dumps(payload), qos=1, retain=True
+        )
+
+    await _publish_presence()
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _publish_presence, timedelta(seconds=PRESENCE_INTERVAL_S)
+        )
+    )
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> bool:
     """Unload a Deckhand config entry."""
+    # R1: graceful stand-down — empty-clear the retained presence beacon so
+    # Helm/Console resume authority instantly (no waiting out the 90s TTL)
+    # when HACS is removed/restarted cleanly. Same empty-retained convention
+    # as sensor_watches. Best-effort: teardown must never raise on this.
+    try:
+        await mqtt.async_publish(
+            hass,
+            TOPIC_HACS_PRESENCE.format(team_id=entry.data[CONF_TEAM_ID]),
+            "",
+            qos=1,
+            retain=True,
+        )
+    except Exception:  # noqa: BLE001 - unload path must not raise
+        _LOGGER.debug("presence beacon clear on unload failed", exc_info=True)
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         store = hass.data[DOMAIN].pop(entry.entry_id, None)
