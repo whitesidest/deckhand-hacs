@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any
@@ -59,6 +60,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import publish_image_to_dial
 from ._media_control import media_service_for_dial_event
+from ._now_playing import now_playing_fields
 
 
 def _dispatch_dial_media_control(hass: HomeAssistant, envelope: dict) -> None:
@@ -747,25 +749,14 @@ def _extract_now_playing(
 
     attr = state.attributes or {}
 
-    # Title: media_title is the canonical field. Jellyfin/Plex sometimes
-    # leave it empty on the transition into a new item — fall back to
-    # media_content_id so we emit something rather than a blank.
-    title = attr.get("media_title") or ""
-    if not title:
-        # content_id is often a URL/path; only use it if it's short.
-        cid = attr.get("media_content_id") or ""
-        if cid and len(cid) < 96 and "/" not in cid:
-            title = cid
-
-    # Artist: album_artist is the fallback for compilations; for video
-    # we prefer the series title so "The Bear - S2E3" reads right.
-    artist = attr.get("media_artist") or attr.get("media_album_artist") or ""
-    if not artist:
-        artist = attr.get("media_series_title") or ""
-
-    # Source: app_name is set by Jellyfin/Plex/Spotify; otherwise use the
-    # friendly name so the dial can show which device is playing.
-    source = attr.get("app_name") or attr.get("friendly_name") or entity_id
+    # Split the media_player state into the dial's four Now-Playing fields:
+    # "Artist - Song" up top, "Channel | Speaker" on the bottom marquee.
+    # The routing (incl. the AmpliPi channel-in-media_title quirk) is pure
+    # and lives in _now_playing so it's unit-testable.
+    fields = now_playing_fields(attr, entity_id)
+    title = fields["title"]
+    artist = fields["artist"]
+    source = fields["source"]
 
     album_art_url = _resolve_entity_picture_url(hass, attr.get("entity_picture") or "")
 
