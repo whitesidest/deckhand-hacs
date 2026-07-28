@@ -26,6 +26,7 @@ _spec = importlib.util.spec_from_file_location(
 _np = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_np)
 now_playing_fields = _np.now_playing_fields
+now_playing_capabilities = _np.now_playing_capabilities
 
 
 class NowPlayingFieldsTests(unittest.TestCase):
@@ -119,6 +120,40 @@ class NowPlayingFieldsTests(unittest.TestCase):
             "media_player.hall",
         )
         self.assertEqual(f["title"], "")
+
+
+class CapabilitiesTests(unittest.TestCase):
+    # supported_features bits: PREVIOUS_TRACK=16, NEXT_TRACK=32, VOLUME_SET=4.
+    def test_both_skip_supported(self):
+        self.assertEqual(
+            now_playing_capabilities({"supported_features": 16 | 32 | 4}),
+            {"can_next": True, "can_prev": True},
+        )
+
+    def test_office_2_real_value_next_only(self):
+        # Real AmpliPi office_2 reported 675629 = NEXT(32) but NOT
+        # PREVIOUS(16) — the dial should offer next, not previous.
+        self.assertEqual(
+            now_playing_capabilities({"supported_features": 675629}),
+            {"can_next": True},
+        )
+
+    def test_only_true_keys_returned(self):
+        # A player with NEXT but not PREVIOUS (32, no 16).
+        self.assertEqual(
+            now_playing_capabilities({"supported_features": 32 | 4}),
+            {"can_next": True},
+        )
+
+    def test_no_skip_support_returns_empty(self):
+        # A player that can only set volume (4) — no skip → dial shows no
+        # next affordance, i.e. a plain now-playing view.
+        self.assertEqual(now_playing_capabilities({"supported_features": 4}), {})
+
+    def test_missing_or_bad_supported_features(self):
+        self.assertEqual(now_playing_capabilities({}), {})
+        self.assertEqual(now_playing_capabilities({"supported_features": None}), {})
+        self.assertEqual(now_playing_capabilities({"supported_features": "x"}), {})
 
 
 if __name__ == "__main__":
