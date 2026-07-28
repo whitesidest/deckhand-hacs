@@ -58,6 +58,28 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
 )
 from .image_push import publish_image_to_dial
+from ._media_control import media_service_for_dial_event
+
+
+def _dispatch_dial_media_control(hass: HomeAssistant, envelope: dict) -> None:
+    """Drive a media_player from a dial button_press event.
+
+    ``envelope`` is the raw dial event ``{type, ts, payload}``. When the
+    dial is on the Now-Playing / Volume face, a tap (play/pause) or a
+    turn (volume) arrives as a ``button_press`` whose inner ``item_id``
+    is the HA ``media_player.*`` entity cmd/now_playing was sourced from
+    (see ``_extract_now_playing`` → ``payload["entity_id"]``). The pure
+    mapping lives in ``_media_control``; here we just fire the resulting
+    service call. No-op for any other event — purely additive to the raw
+    event re-fire in ``_handle_event``.
+    """
+    result = media_service_for_dial_event(envelope)
+    if result is None:
+        return
+    service, service_data = result
+    hass.async_create_task(
+        hass.services.async_call("media_player", service, service_data, blocking=False)
+    )
 
 # IANA → POSIX TZ map. The firmware hands the value straight to
 # setenv("TZ", ...) which only understands POSIX, not IANA, so we have
@@ -479,6 +501,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             },
         )
 
+        # Media control loopback. When a dial on the Now-Playing / Volume
+        # face is tapped (play/pause) or turned (volume), the firmware
+        # publishes a button_press whose item_id is the HA media_player
+        # entity that cmd/now_playing was sourced from. Dispatch it to the
+        # matching media_player service so the dial actually drives the
+        # speaker. Handled in a module-level helper (not inline) so this
+        # raw re-fire block stays free of the enriched identity keys the
+        # NFC contract test pins — see tests/test_nfc_event_paths.py.
+        _dispatch_dial_media_control(hass, payload)
+
     entry.async_on_unload(
         await mqtt.async_subscribe(hass, event_topic, _handle_event, qos=0)
     )
@@ -739,6 +771,15 @@ def _extract_now_playing(
 
     is_playing = state.state == "playing"
 
+    # Current volume (0-100). The dial seeds its rotary from this so the
+    # first encoder tick nudges from the real level instead of a guess.
+    # Absent on players that don't expose volume (e.g. some TVs) — the
+    # firmware keeps its last-known value in that case.
+    volume: int | None = None
+    raw_vol = attr.get("volume_level")
+    if isinstance(raw_vol, (int, float)):
+        volume = max(0, min(100, int(round(float(raw_vol) * 100))))
+
     payload: dict[str, Any] = {
         # Echo the entity id so the dial can target the right
         # media_player when the user taps play/pause on the now-playing
@@ -753,6 +794,8 @@ def _extract_now_playing(
     }
     if album_art_url:
         payload["album_art_url"] = str(album_art_url)[:256]
+    if volume is not None:
+        payload["volume"] = volume
     return payload
 
 
