@@ -142,9 +142,11 @@ class BlueprintLintTests(unittest.TestCase):
             )
 
     def test_no_stray_files_in_blueprint_dir(self):
-        # Anything unexpected here ships to every HACS user.
+        # Anything unexpected here ships to every HACS user. Non-NFC
+        # blueprints added deliberately get listed here AND linted in
+        # their own test module (dnd_hold_calls → tests/test_dnd.py).
         actual = {p.name for p in BLUEPRINT_DIR.iterdir()}
-        self.assertEqual(actual, set(BLUEPRINT_ACTIONS))
+        self.assertEqual(actual, set(BLUEPRINT_ACTIONS) | {"dnd_hold_calls.yaml"})
 
     def test_blueprints_parse_with_metadata(self):
         for name in BLUEPRINT_ACTIONS:

@@ -47,6 +47,7 @@ from .const import (
     TOPIC_MENU_REQUEST,
     TOPIC_INVITATION_REQUEST,
     TOPIC_CMD_FACE_STATE,
+    TOPIC_CMD_DND,
     TOPIC_CMD_NOW_PLAYING,
     TOPIC_CMD_OVERLAY,
     TOPIC_CMD_REBOOT,
@@ -1730,6 +1731,64 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             len(targets), ", ".join(d for d, _ in targets),
         )
 
+    async def _set_dnd(call) -> None:
+        """Set/clear quiet-mode Do Not Disturb on dial(s) (helm#179).
+
+        Wire contract mirrors Helm's ``apps/mqtt/tasks.py::push_dnd``
+        exactly (see TOPIC_CMD_DND in const.py): the on-payload is
+        retained so an offline dial converges on reconnect; the
+        off-payload is published (retained, matching Helm's
+        ``_RETAINED_SUBTOPICS`` behavior byte-for-byte) and then the
+        retained slot is immediately CLEARED with an empty payload —
+        the invitation-terminal-state hygiene rule — so the broker
+        never replays a stale mode at a reconnecting dial. Publish
+        order inside the loop guarantees the clear lands after the
+        set. Dial-local state always wins conflicts: the dial's NVS is
+        the on-device truth and its status/``dnd_changed`` echo is what
+        the DND binary_sensor reports.
+
+        R1 executor-arbitration note: DND is idempotent *state*, not a
+        media action — the dial is the single executor and every remote
+        setter (Helm, HACS, SF, guest tap) converges through the same
+        retained topic + status echo. No presence/``owns`` change here;
+        double-publish from two setters is harmless by design.
+        """
+        await _require_admin(call)
+        device_id = call.data.get("device_id")
+        on = call.data.get("on")
+        if isinstance(on, str):  # YAML mode can hand over "true"/"false"
+            low = on.strip().lower()
+            if low in ("true", "on", "yes"):
+                on = True
+            elif low in ("false", "off", "no"):
+                on = False
+        if not isinstance(on, bool):
+            raise ServiceValidationError("on must be true or false")
+
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            _LOGGER.warning(
+                "set_dnd: could not resolve device_id %s to any dial(s)", device_id
+            )
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+
+        body = json.dumps({"on": on, "source": "ha"})
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_DND.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, qos=1, retain=True)
+            if not on:
+                # Empty-clear the retained slot — DND has ended; never
+                # leave the broker holding {"on": false} to replay.
+                await mqtt.async_publish(hass, topic, "", qos=1, retain=True)
+        _LOGGER.info(
+            "set_dnd %s → %d dial(s): %s",
+            "on" if on else "off",
+            len(targets), ", ".join(d for d, _ in targets),
+        )
+
     async def _set_timezone(call) -> None:
         """Push a per-dial timezone via cmd/config.
 
@@ -2672,6 +2731,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "send_countdown", _send_countdown)
     if not hass.services.has_service(DOMAIN, "reboot"):
         hass.services.async_register(DOMAIN, "reboot", _reboot)
+    if not hass.services.has_service(DOMAIN, "set_dnd"):
+        hass.services.async_register(DOMAIN, "set_dnd", _set_dnd)
     if not hass.services.has_service(DOMAIN, "apply_overlay"):
         hass.services.async_register(DOMAIN, "apply_overlay", _apply_overlay)
     if not hass.services.has_service(DOMAIN, "update_now_playing"):

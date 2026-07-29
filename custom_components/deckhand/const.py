@@ -40,6 +40,17 @@ TOPIC_CMD_OVERLAY = "deckhand/{team_id}/dial/{dial_id}/cmd/overlay"
 # {"epoch": N} (also {"sunset_at": N}); 0/absent clears to manual.
 TOPIC_CMD_SUNSET = "deckhand/{team_id}/dial/{dial_id}/cmd/sunset"
 TOPIC_CMD_NOW_PLAYING = "deckhand/{team_id}/dial/{dial_id}/cmd/now_playing"
+# cmd/dnd — quiet-mode Do Not Disturb (helm#179 Phase 2). Wire contract
+# mirrors Helm's apps/mqtt/tasks.py::push_dnd EXACTLY:
+#   on  → retained {"on": true,  "source": "ha"}  (offline dials converge
+#         on reconnect via broker retention)
+#   off → retained {"on": false, "source": "ha"} publish so an online
+#         dial hears the clear immediately, then an EMPTY retained
+#         payload to the same topic (the invitation-terminal-state
+#         hygiene rule) so the broker never replays a stale mode at a
+#         reconnecting dial. The dial's NVS is the on-device truth and
+#         treats the empty retained payload as a no-op.
+TOPIC_CMD_DND = "deckhand/{team_id}/dial/{dial_id}/cmd/dnd"
 TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
 
 # sensor_watches: retained per-dial list of HA entity_ids the dial's
