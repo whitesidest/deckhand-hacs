@@ -1970,6 +1970,24 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                     out["opacity"] = op
             except (TypeError, ValueError):
                 pass
+        # Numeric-threshold keys (grid energy, tank level, …). The
+        # firmware ignores these at mount — they are honored by Helm's
+        # ``poll_perimeter_faces`` feeder ONLY (i.e. faces published
+        # through Helm, where float(entity state) > numeric_threshold
+        # pushes above_state / below_state). They pass through here so
+        # a ring config round-trips intact between the HACS and Helm
+        # paths; under the self-driven HACS path, compute the state
+        # string with an HA template and send it via
+        # ``update_perimeter_state`` instead.
+        if raw.get("numeric_threshold") is not None:
+            try:
+                out["numeric_threshold"] = float(raw["numeric_threshold"])
+            except (TypeError, ValueError):
+                pass
+        for key in ("above_state", "below_state"):
+            val = raw.get(key)
+            if isinstance(val, str) and val.strip():
+                out[key] = val.strip()
         return out
 
     async def _publish_face_mount(
@@ -1983,7 +2001,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             await mqtt.async_publish(hass, topic, body, retain=retained)
 
     async def _mount_perimeter_pulse(call) -> None:
-        """Mount Perimeter Pulse with structured bindings + appearance."""
+        """Mount Perimeter Pulse with structured bindings + appearance.
+
+        Two ways to run a perimeter ring — pick one:
+
+        * **HACS-mounted (this service): self-driven.** The ring is
+          static until YOUR automations push updates via
+          ``update_perimeter_state`` — event-driven, LAN-local, no Helm
+          dependency. For numeric sensors, an HA template can compute
+          the state string directly (e.g. ``{{ 'exporting' if
+          states('sensor.grid_power')|float > 0 else 'importing' }}``);
+          the ``numeric_threshold`` / ``above_state`` / ``below_state``
+          binding keys are honored by Helm's feeder only and merely
+          pass through here.
+        * **Helm-published (Face publish endpoint / Faces editor):
+          persistent + fed.** Helm persists the Face, points
+          ``Dial.current_face`` at it, and ``poll_perimeter_faces``
+          polls the bound HA entities every ~10s — including the
+          numeric-threshold comparison. Use that path when you want the
+          ring to live without any HA automations.
+        """
         await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
@@ -2057,7 +2094,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _update_perimeter_state(call) -> None:
-        """Push state updates for one or more Perimeter Pulse bindings."""
+        """Push state updates for one or more Perimeter Pulse bindings.
+
+        The live lane for HACS-mounted (self-driven) rings. Wire
+        contract (fw pp_on_state, canonical since 0.4.21):
+        ``{"bindings": [{id, state | value | event}]}`` — ``state`` is
+        string-matched against the binding's ``active_state``,
+        ``value`` (0-1) drives the gradient treatment, ``event: true``
+        fires a ripple/flash pulse. Helm-published faces don't need
+        this — Helm's feeder pushes the same topic itself.
+        """
         await _require_admin(call)
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
@@ -2086,7 +2132,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 row["state"] = str(entry["state"])
             if "value" in entry and entry["value"] is not None:
                 try:
-                    row["value"] = float(entry["value"])
+                    # Gradient position — firmware treats it as 0-1 and
+                    # lerps without clamping (pp_on_state stores the raw
+                    # float), so keep the 0-1 contract here exactly like
+                    # the mount-side shaper does.
+                    row["value"] = min(max(float(entry["value"]), 0.0), 1.0)
                 except (TypeError, ValueError):
                     pass
             if entry.get("event"):
