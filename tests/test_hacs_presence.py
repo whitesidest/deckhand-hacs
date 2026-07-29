@@ -102,13 +102,14 @@ class OwnsCapabilityTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_manifest_version_is_1_10_0(self):
-        # 1.10.0 = DND Phase 2 (binary_sensor + set_dnd + blueprint).
+    def test_manifest_version_is_1_10_1(self):
+        # 1.10.1 = Perimeter v2 (numeric-threshold binding keys + path
+        # steering docs + update-lane value clamp).
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "1.10.0")
+        self.assertEqual(data["version"], "1.10.1")
 
     def test_hacs_version_reads_manifest(self):
-        self.assertEqual(hacs_version(), "1.10.0")
+        self.assertEqual(hacs_version(), "1.10.1")
 
 
 # ── Source-level wiring guards ──────────────────────────────────────

@@ -732,6 +732,16 @@ mount_perimeter_pulse:
     the round display, with each binding owning an angular segment
     rendered via a treatment (state_color / ripple / gradient / flash /
     sweep). Retained — the dial re-mounts the same face on reboot.
+
+    Rings mounted here are SELF-DRIVEN: drive them from your own
+    automations with update_perimeter_state (event-driven, local, no
+    Helm dependency). For a PERSISTENT ring fed automatically, publish
+    the face through Helm instead (Faces editor or the integration
+    API's face/publish endpoint) — Helm's poller then reads the bound
+    entities every ~10s, including numeric_threshold comparisons. The
+    numeric_threshold / above_state / below_state binding keys are
+    honored by Helm's feeder ONLY; under the HACS path use an HA
+    template to compute the state string (see the grid_power example).
   fields:
     device_id:
       name: Device
@@ -749,9 +759,16 @@ mount_perimeter_pulse:
         default 24, ignored when contiguous), treatment, state,
         active_state (default "open"), base_color "#RRGGBB",
         active_color "#RRGGBB", value (0-1, gradient position),
-        opacity (0-1, overrides bar_opacity) }. Treatments: state_color
+        opacity (0-1, overrides bar_opacity), numeric_threshold,
+        above_state, below_state }. Treatments: state_color
         (locks / doors), ripple (motion / doorbell), gradient
         (continuous value), flash (alarms), sweep (ambient zone).
+        The numeric_threshold trio (float(entity state) > threshold →
+        above_state, else below_state) only takes effect on
+        Helm-published faces — Helm's feeder does the comparison; the
+        dial itself only string-matches. Under the HACS self-driven
+        path they pass through harmlessly; compute the state string
+        with an HA template instead (grid_power example below).
       required: true
       example: |
         - id: front_door
@@ -770,6 +787,22 @@ mount_perimeter_pulse:
           active_state: "on"
           base_color: "#3A4A5A"
           active_color: "#9AC8E8"
+        # Grid energy: exporting lights the segment green. The
+        # threshold keys below only matter if this same config is
+        # published via Helm; for THIS service, pair the binding with
+        # an automation that pushes update_perimeter_state, e.g.
+        # state: "{{ 'exporting' if states('sensor.grid_power')|float(0) > 0 else 'importing' }}"
+        - id: sensor.grid_power
+          friendly_name: Grid
+          angular_center: 180
+          angular_width: 40
+          treatment: state_color
+          active_state: exporting
+          numeric_threshold: 0
+          above_state: exporting
+          below_state: importing
+          base_color: "#30435C"
+          active_color: "#3FAE6A"
       selector:
         object:
     contiguous:
@@ -814,6 +847,14 @@ update_perimeter_state:
     HA automations: when a lock unlocks, when a motion sensor trips,
     when a temperature changes. Set "event: true" to trigger ripple /
     flash animation for that frame.
+
+    This is the live lane for HACS-mounted (self-driven) rings. For
+    numeric sensors, compute the state string with a template, e.g.
+    state: "{{ 'exporting' if states('sensor.grid_power')|float(0) > 0
+    else 'importing' }}" — the dial string-matches against the
+    binding's active_state. Helm-published faces don't need this
+    service: Helm's ~10s poller pushes the same updates itself
+    (including numeric_threshold handling).
   fields:
     device_id:
       name: Device
@@ -826,8 +867,9 @@ update_perimeter_state:
       name: Bindings to update
       description: >
         Array of state updates. Each entry is { id, state, value, event }.
-        At minimum supply id and either state or value. Set event=true to
-        fire a ripple/flash pulse on the binding.
+        At minimum supply id and either state or value (0-1, gradient
+        position — clamped). Set event=true to fire a ripple/flash pulse
+        on the binding.
       required: true
       example: |
         - id: front_door
