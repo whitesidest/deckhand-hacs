@@ -102,12 +102,13 @@ class OwnsCapabilityTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_manifest_version_is_1_9_9(self):
+    def test_manifest_version_is_1_10_0(self):
+        # 1.10.0 = DND Phase 2 (binary_sensor + set_dnd + blueprint).
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "1.9.9")
+        self.assertEqual(data["version"], "1.10.0")
 
     def test_hacs_version_reads_manifest(self):
-        self.assertEqual(hacs_version(), "1.9.9")
+        self.assertEqual(hacs_version(), "1.10.0")
 
 
 # ── Source-level wiring guards ──────────────────────────────────────

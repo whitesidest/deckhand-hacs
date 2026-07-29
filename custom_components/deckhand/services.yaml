@@ -243,6 +243,40 @@ reboot:
           integration: deckhand
           multiple: true
 
+set_dnd:
+  name: Set Do Not Disturb
+  description: >
+    Set or clear quiet-mode Do Not Disturb on Deckhand dial(s). DND
+    silences the dial's haptics (its only sound source) and shows the
+    lavender indicator; the dial stays fully usable. The set is retained
+    on the broker so an offline dial converges when it reconnects; on
+    clear the retained slot is emptied so a stale mode is never
+    replayed. The person at the dial always wins: a local change on the
+    dial overrides this remote set, and the "Do Not Disturb"
+    binary_sensor reflects the dial-reported truth. Requires firmware
+    0.4.44+ (older dials ignore the command and their DND sensor shows
+    unavailable).
+  fields:
+    device_id:
+      name: Device
+      description: >
+        The Deckhand dial device(s) to set. You can pick several dials, a
+        Room, or type the special id "all" (YAML mode) to target every
+        dial.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    # Quoted — bare `on` is YAML-1.1 boolean True and would corrupt the
+    # field name in any spec-compliant loader.
+    "on":
+      name: Do Not Disturb
+      description: True to enter Do Not Disturb, false to end it.
+      required: true
+      selector:
+        boolean:
+
 set_timezone:
   name: Set Timezone
   description: >
