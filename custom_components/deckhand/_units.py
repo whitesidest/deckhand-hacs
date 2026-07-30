@@ -1,4 +1,4 @@
-"""Generated copy of deckhand_sdk/deckhand/units.py — keep in sync.
+"""Generated copy of deckhand-sdk/src/deckhand_sdk/units.py — keep in sync.
 
 HACS integrations can't depend on an external PyPI package at runtime
 without going through Home Assistant's manifest.json requirements list,
@@ -6,7 +6,7 @@ which would force a venv install on every HA instance. Vendoring the
 module avoids that — the trade-off is that two repos hold the same
 file. The canonical copy lives at:
 
-    deckhand-sdk/deckhand/units.py
+    deckhand-sdk/src/deckhand_sdk/units.py
 
 TODO(#2 followup ticket): add CI lint that diffs this file against the
 SDK source and fails the build if they drift. Until then, any change
