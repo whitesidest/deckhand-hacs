@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - defensive fallback
 from .const import (
     CONF_MEDIA_PLAYER_BINDINGS,
     CONF_TEAM_ID,
+    DEFAULT_TRANSITION,
     DOMAIN,
     MANUFACTURER,
     HARDWARE_MODELS,
@@ -58,6 +59,7 @@ from .const import (
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
     TOPIC_THEME_REQUEST,
+    TRANSITIONS,
     SERVER_RESOLVED_THEMES,
 )
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
@@ -1219,6 +1221,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         from_name = call.data.get("from_name", "Home Assistant")
         duration = call.data.get("duration", 30)
         animation = call.data.get("animation", "none")
+        transition = _resolve_transition(call.data.get("transition"))
         snapshot_entity = call.data.get("snapshot_entity")
         image_url = call.data.get("image_url")
         if not isinstance(message, str) or not message.strip():
@@ -1259,6 +1262,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # the active theme set as its notification animation.
         if isinstance(animation, str) and animation and animation != "none":
             payload["animation"] = animation
+        # Per-send arrival transition (helm#224). Same publisher rule as
+        # ``animation`` above: the default stays OFF the wire, so an
+        # automation that doesn't opt in produces the payload it always
+        # did and the dial keeps using its fade coordinator.
+        if transition != DEFAULT_TRANSITION:
+            payload["transition"] = transition
         # Tell the dial an image backdrop is streaming so it suppresses
         # theme animation and waits for the cmd/image chunks. Firmware
         # reads this as ``announce_has_pending_image`` (mirrors Helm's
@@ -1280,8 +1289,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                         dial_id,
                     )
         _LOGGER.info(
-            "Sent announcement to %d dial(s): %s (animation=%s, image=%s)",
-            len(targets), message, animation, image_bytes is not None,
+            "Sent announcement to %d dial(s): %s (animation=%s, transition=%s, image=%s)",
+            len(targets), message, animation, transition, image_bytes is not None,
         )
 
     async def _send_countdown(call) -> None:
@@ -2599,6 +2608,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 'presentation must be "prompt" or "menu"'
             )
 
+        # Per-send arrival transition (helm#224). ARRIVAL ONLY —
+        # cancel_invitation deliberately never carries this; a cancel is
+        # usually a correction or a timeout and making it theatrical
+        # draws attention to a mistake.
+        transition = _resolve_transition(call.data.get("transition"))
+
         if presentation == "menu":
             # Quiet invitation (helm#165): a menu item instead of a
             # screen-taking prompt. The direct face-mount transport
@@ -2647,6 +2662,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             menu_on_accept = call.data.get("on_accept")
             if isinstance(menu_on_accept, dict) and menu_on_accept:
                 request["on_accept"] = menu_on_accept
+            # A quiet invitation still mounts a prompt when the guest
+            # selects the menu item, so the choice is meaningful here
+            # too — Helm bakes it into the item's stored payload.
+            if transition != DEFAULT_TRANSITION:
+                request["transition"] = transition
 
             sent_ids = []
             for dial_id, team_id in targets:
@@ -2708,6 +2728,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         on_accept = call.data.get("on_accept")
         if isinstance(on_accept, dict) and on_accept:
             payload["on_accept"] = on_accept
+
+        if transition != DEFAULT_TRANSITION:
+            payload["transition"] = transition
 
         sent_ids: list[str] = []
         for dial_id, team_id in targets:
@@ -3017,6 +3040,29 @@ def _resolve_all_dials(hass: HomeAssistant) -> list[tuple[str, str]]:
             if dial_id:
                 out.append((dial_id, str(team_id)))
     return out
+
+
+def _resolve_transition(raw: Any) -> str:
+    """Validate a service call's ``transition`` field (helm#224).
+
+    Raises on an unknown value rather than silently degrading. HA
+    service calls come from an automation an operator wrote and is
+    watching; a curtain that quietly didn't happen reads as a broken
+    dial, whereas a validation error names the four valid options in the
+    HA log where the author will find it. (Helm's webhook ingress and
+    the firmware still degrade to fade — that is the right posture for
+    traffic nobody is watching.)
+    """
+    if raw is None:
+        return DEFAULT_TRANSITION
+    value = str(raw).strip().lower()
+    if not value:
+        return DEFAULT_TRANSITION
+    if value not in TRANSITIONS:
+        raise ServiceValidationError(
+            f"transition must be one of {', '.join(TRANSITIONS)} (got {raw!r})"
+        )
+    return value
 
 
 def _resolve_targets(

@@ -159,6 +159,18 @@ HARDWARE_MODELS = {
     "unknown": "Deckhand Dial",
 }
 
+# Per-send screen transition (helm#224). How an announcement or an
+# invitation ARRIVES on the dial. Mirrors Helm's
+# ``apps.utils.transitions.TRANSITION_CHOICES`` and the firmware parser
+# in ``deckhand-firmware/src/screen_transition_policy.h``.
+#
+# "fade" is the DEFAULT and is the coalescing fade the dial has always
+# used, so it is never put on the wire — an automation that does not opt
+# in keeps producing byte-identical payloads. Same publisher rule the
+# ``animation`` key already follows in _send_announcement.
+TRANSITIONS = ("fade", "none", "iris", "dissolve")
+DEFAULT_TRANSITION = "fade"
+
 # Platforms to set up
 PLATFORMS = [
     "sensor",

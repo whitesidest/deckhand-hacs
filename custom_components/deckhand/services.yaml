@@ -116,6 +116,24 @@ send_announcement:
             - "signal:priority"
             - "signal:emergency"
             - "signal:dnd"
+    transition:
+      name: Arrival
+      description: >
+        How the announcement ARRIVES on screen. ``fade`` is the default
+        and is the standard easing every announcement has always used —
+        leaving it alone changes nothing. ``none`` appears instantly.
+        ``iris`` closes a circle over the screen and opens it on the
+        announcement; ``dissolve`` does the same with a soft fade. Save
+        the curtains for moments that deserve them: on routine traffic
+        they make a room feel busier, not calmer.
+      default: "fade"
+      selector:
+        select:
+          options:
+            - "fade"
+            - "none"
+            - iris
+            - dissolve
     snapshot_entity:
       name: Camera snapshot
       description: >
@@ -1624,6 +1642,25 @@ send_invitation:
       example: "Home Assistant"
       selector:
         text:
+    transition:
+      name: Arrival
+      description: >
+        How the prompt ARRIVES on screen. ``fade`` is the default and is
+        the standard easing every invitation has always used. ``none``
+        appears instantly. ``iris`` closes a circle over the screen and
+        opens it on the prompt; ``dissolve`` does the same with a soft
+        fade. Arrival only — ``cancel_invitation`` always returns
+        quietly, whatever is set here, because a cancel is usually a
+        correction or a timeout and making it theatrical draws attention
+        to a mistake.
+      default: "fade"
+      selector:
+        select:
+          options:
+            - "fade"
+            - "none"
+            - iris
+            - dissolve
     on_accept:
       name: On-accept payload
       description: >
