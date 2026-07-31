@@ -619,8 +619,8 @@ update_now_playing:
         text:
     source:
       name: Source label
-      description: e.g. "Spotify", "Sonos", "AirPlay".
-      example: "Spotify"
+      description: Free text. e.g. "Sonos", "AirPlay", "Jellyfin".
+      example: "Sonos"
       selector:
         text:
     is_playing:
