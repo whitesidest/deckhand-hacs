@@ -556,17 +556,6 @@ apply_overlay:
           unit: "%"
       selector:
         object:
-    marquee_position:
-      name: Marquee position
-      description: >
-        Where the scrolling marquee renders on the dial face. Only
-        "subtitle" is supported (the ring/circumference mode was removed
-        2026-07-22; revisit at LVGL 9).
-      default: subtitle
-      selector:
-        select:
-          options:
-            - subtitle
     framecast_frame_id:
       name: FrameCast frame ID
       description: >

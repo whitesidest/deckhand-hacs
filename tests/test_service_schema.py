@@ -69,7 +69,13 @@ APPLY_OVERLAY_FIELDS = frozenset({
     "sensor_quad_4_entity_id",
     "sensor_quad_4_label",
     "sensor_marquee",
-    "marquee_position",
+    # marquee_position removed 2026-08-01: "subtitle" became its only legal
+    # value when ring mode went (2026-07-22), so the field asked a question
+    # with one answer. It was never read on the dial either — face_sensor.h
+    # unconditionally assigns SENSOR_MARQUEE_SUBTITLE and ignores the
+    # payload. Intentional removal, not surface-shrink. If ring mode returns
+    # at LVGL 9, the firmware must read the field again before this comes
+    # back. The handler still tolerates the key so old automations survive.
     # weather_entity_id removed 2026-06-06 with the Weather face (all
     # surfaces); cmd/weather data plumbing survives for marquees only.
     # Pin updated 2026-07-17 — intentional removal, not surface-shrink.

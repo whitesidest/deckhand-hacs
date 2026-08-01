@@ -160,7 +160,6 @@ _OVERLAY_HOME_FACES = {
     "volume", "framecast",
 }
 _OVERLAY_QUAD_SLOTS = (2, 3, 4)
-_OVERLAY_MARQUEE_POSITIONS = {"subtitle"}  # "ring" removed 2026-07-22 (revisit at LVGL 9)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1505,20 +1504,24 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                         "unit": str(item.get("unit") or "")[:8],
                     })
 
-        marquee_position = call.data.get("marquee_position")
-        if marquee_position is not None and marquee_position not in _OVERLAY_MARQUEE_POSITIONS:
-            raise ServiceValidationError(
-                f"marquee_position must be one of {sorted(_OVERLAY_MARQUEE_POSITIONS)}"
-            )
-
-        if quad_entries or marquee_entries or marquee_position:
+        # marquee_position was removed as a service field: "subtitle" was
+        # its only legal value once ring mode went away (2026-07-22), so it
+        # asked the operator a question with one answer. It is not sent on
+        # the wire either — the firmware's parser never reads it. See
+        # face_sensor.h, which unconditionally assigns
+        # SENSOR_MARQUEE_SUBTITLE and ignores any value in the payload, so
+        # sending it was pure noise. If ring mode ever returns at LVGL 9,
+        # the firmware has to start reading the field again first.
+        #
+        # Accepted-and-ignored rather than rejected: an existing automation
+        # still passing marquee_position keeps working instead of breaking
+        # on upgrade with a validation error.
+        if quad_entries or marquee_entries:
             sensors_block: dict[str, Any] = {}
             if quad_entries:
                 sensors_block["quad"] = quad_entries
             if marquee_entries:
                 sensors_block["marquee"] = marquee_entries
-            if marquee_position:
-                sensors_block["marquee_position"] = marquee_position
             payload["sensors"] = sensors_block
             # Slot 1 was packed into ``sensors.quad`` above; drop the
             # top-level legacy fields so the firmware reads only one
