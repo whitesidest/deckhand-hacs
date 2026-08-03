@@ -15,18 +15,36 @@ Run with:  python3 -m pytest tests/test_now_playing_fields.py
 from __future__ import annotations
 
 import importlib.util
+import sys
+import types
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+_COMPONENT = ROOT / "custom_components" / "deckhand"
+
+# _now_playing imports ._units for ASCII folding, so it needs a parent
+# package for that relative import to resolve. We can't import the real
+# `custom_components.deckhand` package — its __init__ pulls in
+# homeassistant.* and there's no HA runtime here, which is the whole
+# reason these modules are kept pure. So stand up a synthetic parent whose
+# __path__ points at the component directory: the relative import then
+# resolves against the real files without executing __init__.
+_pkg = types.ModuleType("deckhand_pure")
+_pkg.__path__ = [str(_COMPONENT)]
+sys.modules.setdefault("deckhand_pure", _pkg)
+
 _spec = importlib.util.spec_from_file_location(
-    "deckhand_now_playing",
-    ROOT / "custom_components" / "deckhand" / "_now_playing.py",
+    "deckhand_pure._now_playing",
+    _COMPONENT / "_now_playing.py",
 )
 _np = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _np
 _spec.loader.exec_module(_np)
 now_playing_fields = _np.now_playing_fields
 now_playing_capabilities = _np.now_playing_capabilities
+now_playing_sources = _np.now_playing_sources
+now_playing_controls = _np.now_playing_controls
 
 
 class NowPlayingFieldsTests(unittest.TestCase):
@@ -122,38 +140,127 @@ class NowPlayingFieldsTests(unittest.TestCase):
         self.assertEqual(f["title"], "")
 
 
+PAUSE, VOLUME_SET, PREVIOUS_TRACK = 1, 4, 16
+NEXT_TRACK, SELECT_SOURCE, PLAY = 32, 2048, 16384
+
+
 class CapabilitiesTests(unittest.TestCase):
-    # supported_features bits: PREVIOUS_TRACK=16, NEXT_TRACK=32, VOLUME_SET=4.
+    """These used to assert only can_next / can_prev.
+
+    That narrowness was the bug: Helm pushed no flags at all while HACS
+    pushed two, so the same dial drew a different button set depending on
+    which system published last. Both now derive the same six keys from the
+    same Home Assistant bits, so the tests widened with them.
+    """
+
     def test_both_skip_supported(self):
         self.assertEqual(
-            now_playing_capabilities({"supported_features": 16 | 32 | 4}),
-            {"can_next": True, "can_prev": True},
+            now_playing_capabilities({"supported_features": PREVIOUS_TRACK | NEXT_TRACK | VOLUME_SET}),
+            {"can_next": True, "can_prev": True, "can_volume": True},
         )
 
-    def test_office_2_real_value_next_only(self):
-        # Real AmpliPi office_2 reported 675629 = NEXT(32) but NOT
-        # PREVIOUS(16) — the dial should offer next, not previous.
+    def test_office_2_real_value(self):
+        # Real AmpliPi office_2 reported 675629. Decoded, that is PAUSE,
+        # VOLUME_SET, VOLUME_MUTE, NEXT_TRACK, TURN_OFF, PLAY_MEDIA,
+        # VOLUME_STEP, SELECT_SOURCE, PLAY, BROWSE_MEDIA and GROUPING —
+        # PREVIOUS_TRACK is genuinely clear, so the dial offers next but
+        # not previous. Kept as a literal because it is a real observed
+        # value; the decode is asserted in test_the_real_value_decodes_as_claimed.
         self.assertEqual(
             now_playing_capabilities({"supported_features": 675629}),
-            {"can_next": True},
+            {
+                "can_pause": True,
+                "can_play": True,
+                "can_play_pause": True,
+                "can_volume": True,
+                "can_next": True,
+                "can_select_source": True,
+            },
         )
+
+    def test_the_real_value_decodes_as_claimed(self):
+        """Guards the comment above. A literal nobody can verify is how a
+        fabricated 'realistic' mask slips in and pins the wrong behaviour."""
+        self.assertTrue(675629 & NEXT_TRACK)
+        self.assertFalse(675629 & PREVIOUS_TRACK)
+        self.assertTrue(675629 & SELECT_SOURCE)
 
     def test_only_true_keys_returned(self):
         # A player with NEXT but not PREVIOUS (32, no 16).
         self.assertEqual(
-            now_playing_capabilities({"supported_features": 32 | 4}),
-            {"can_next": True},
+            now_playing_capabilities({"supported_features": NEXT_TRACK | VOLUME_SET}),
+            {"can_next": True, "can_volume": True},
         )
 
-    def test_no_skip_support_returns_empty(self):
-        # A player that can only set volume (4) — no skip → dial shows no
-        # next affordance, i.e. a plain now-playing view.
-        self.assertEqual(now_playing_capabilities({"supported_features": 4}), {})
+    def test_volume_only_player_advertises_volume_and_nothing_else(self):
+        # Previously this asserted {} — volume wasn't derived at all, so a
+        # player that could only set volume told the dial nothing.
+        self.assertEqual(
+            now_playing_capabilities({"supported_features": VOLUME_SET}),
+            {"can_volume": True},
+        )
+
+    def test_either_half_of_play_pause_gives_one_centre_press(self):
+        # The dial has a single centre control; HA's media_play_pause
+        # resolves direction from state, so either bit is enough.
+        for bit in (PLAY, PAUSE):
+            with self.subTest(bit=bit):
+                self.assertIs(now_playing_capabilities({"supported_features": bit})["can_play_pause"], True)
 
     def test_missing_or_bad_supported_features(self):
         self.assertEqual(now_playing_capabilities({}), {})
         self.assertEqual(now_playing_capabilities({"supported_features": None}), {})
         self.assertEqual(now_playing_capabilities({"supported_features": "x"}), {})
+
+
+class SourcePickerTests(unittest.TestCase):
+    """SELECT_SOURCE being set is not enough to draw a picker."""
+
+    def test_flag_and_list_together_produce_a_picker(self):
+        out = now_playing_controls(
+            {"supported_features": SELECT_SOURCE, "source_list": ["Aux", "Turntable"]}
+        )
+        self.assertEqual(out["sources"], ["Aux", "Turntable"])
+        self.assertEqual(out["source_count"], 2)
+        self.assertIs(out["can_select_source"], True)
+
+    def test_flag_without_a_list_drops_the_flag(self):
+        # An empty picker is exactly the dead affordance we're removing.
+        out = now_playing_controls({"supported_features": SELECT_SOURCE, "source_list": []})
+        self.assertNotIn("can_select_source", out)
+        self.assertNotIn("sources", out)
+
+    def test_list_without_the_flag_offers_nothing(self):
+        out = now_playing_controls({"supported_features": 0, "source_list": ["Aux"]})
+        self.assertNotIn("can_select_source", out)
+        self.assertNotIn("sources", out)
+
+    def test_source_names_are_folded_not_dropped(self):
+        # "Küche" must not arrive as "Kche" — that reads as a typo and gets
+        # filed against the wrong component.
+        out = now_playing_controls(
+            {"supported_features": SELECT_SOURCE, "source_list": ["Küche", "Café", "Ærø"]}
+        )
+        self.assertEqual(out["sources"], ["Kuche", "Cafe", "AEro"])
+
+    def test_unrenderable_names_fall_out_and_can_take_the_picker_with_them(self):
+        out = now_playing_controls(
+            {"supported_features": SELECT_SOURCE, "source_list": ["日本語", "中文"]}
+        )
+        self.assertNotIn("can_select_source", out)
+
+    def test_list_is_bounded(self):
+        many = [f"Input {i}" for i in range(40)]
+        out = now_playing_controls({"supported_features": SELECT_SOURCE, "source_list": many})
+        self.assertEqual(len(out["sources"]), 12)
+
+    def test_junk_entries_are_skipped(self):
+        out = now_playing_sources({"source_list": ["Aux", None, 7, "", "Phono"]})
+        self.assertEqual(out, ["Aux", "Phono"])
+
+    def test_bad_source_list_shape(self):
+        self.assertEqual(now_playing_sources({}), [])
+        self.assertEqual(now_playing_sources({"source_list": "Aux"}), [])
 
 
 if __name__ == "__main__":

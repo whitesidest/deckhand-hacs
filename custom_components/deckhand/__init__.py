@@ -67,7 +67,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import publish_image_to_dial
 from ._media_control import media_service_for_dial_event
-from ._now_playing import now_playing_capabilities, now_playing_fields
+from ._now_playing import now_playing_controls, now_playing_fields
 from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
 
 
@@ -833,10 +833,13 @@ def _extract_now_playing(
         payload["album_art_url"] = str(album_art_url)[:256]
     if volume is not None:
         payload["volume"] = volume
-    # Transport capabilities (can_next / can_prev) so the dial only offers
-    # skip when HA actually supports it — this is what lets Now-Playing
-    # replace the dedicated media-control face.
-    payload.update(now_playing_capabilities(attr))
+    # Transport capabilities + source list, so the dial only offers a
+    # control HA actually supports — this is what lets Now-Playing replace
+    # the dedicated media-control face. Uses now_playing_controls rather
+    # than the raw capability flags because the source picker needs a
+    # second gate: SELECT_SOURCE with an empty source_list would otherwise
+    # draw an empty picker.
+    payload.update(now_playing_controls(attr))
     return payload
 
 

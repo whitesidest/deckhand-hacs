@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+from ._units import safe_text_for_dial
+
 # AmpliPi and other whole-home amps append a lowercase provider tag to
 # media_title ("Pandora <Station> - pandora") instead of exposing a clean
 # song + app_name. This matches that trailing " - <provider>" tag; the
@@ -23,28 +25,107 @@ _PROVIDER_SUFFIX = re.compile(r"^(?P<body>.+?)\s*-\s*(?P<prov>[a-z][a-z0-9]{1,20
 # conditionally expose on the Now-Playing face (so it subsumes the old
 # dedicated media-control face). Only advertise a control the entity
 # actually supports.
+#
+# Must stay identical to helm/apps/integrations/media_capabilities.py.
+# Both systems push cmd/now_playing, so if the two derivations disagree a
+# dial's button set changes depending on who pushed last — which is the
+# bug this pairing exists to remove (HACS used to send only can_next /
+# can_prev while Helm sent nothing at all). Neither repo can import the
+# other, so both are anchored to Home Assistant's published values.
+_FEAT_PAUSE = 1
+_FEAT_VOLUME_SET = 4
 _FEAT_PREVIOUS_TRACK = 16
 _FEAT_NEXT_TRACK = 32
+_FEAT_SELECT_SOURCE = 2048
+_FEAT_PLAY = 16384
+
+# Wire key -> the bit that has to be set for the dial to draw it.
+_CAPABILITY_BITS: dict[str, int] = {
+    "can_pause": _FEAT_PAUSE,
+    "can_play": _FEAT_PLAY,
+    "can_volume": _FEAT_VOLUME_SET,
+    "can_prev": _FEAT_PREVIOUS_TRACK,
+    "can_next": _FEAT_NEXT_TRACK,
+    "can_select_source": _FEAT_SELECT_SOURCE,
+}
+
+# The centre press is one control on the dial, so it needs one flag. A
+# player that implements either half can be toggled: HA's media_play_pause
+# service resolves the direction from current state.
+_PLAY_PAUSE_BITS = _FEAT_PLAY | _FEAT_PAUSE
+
+# A long source list does not fit a 360px round screen and costs PSRAM in
+# the cached menu item. Twelve is more than any real amp exposes as useful
+# inputs; beyond that the picker stops being a calm affordance anyway.
+_MAX_SOURCES = 12
+_MAX_SOURCE_LEN = 24
 
 
 def now_playing_capabilities(attr: dict) -> dict:
     """Return the transport capabilities to advertise to the dial.
 
-    Reads ``supported_features`` and returns only the keys that are True
-    (``can_next`` / ``can_prev``) so the firmware defaults them off when a
-    player can't skip — the dial then shows a plain Now-Playing view with
-    no next affordance, which is what makes it a superset of the old media
-    face.
+    Reads ``supported_features`` and returns **only the keys that are
+    True**, so the firmware defaults every control off. A player that
+    can't skip yields no next affordance and the dial shows a plain
+    Now-Playing view, which is what makes it a superset of the old media
+    face. Absent has to mean "no": if this emitted ``can_next: False`` the
+    firmware would need to distinguish absent from false, and every older
+    publisher would be ambiguous.
     """
     sf = attr.get("supported_features")
     if not isinstance(sf, int):
         return {}
-    caps: dict = {}
-    if sf & _FEAT_NEXT_TRACK:
-        caps["can_next"] = True
-    if sf & _FEAT_PREVIOUS_TRACK:
-        caps["can_prev"] = True
+    caps = {key: True for key, bit in _CAPABILITY_BITS.items() if sf & bit}
+    if sf & _PLAY_PAUSE_BITS:
+        caps["can_play_pause"] = True
     return caps
+
+
+def now_playing_sources(attr: dict) -> list[str]:
+    """Selectable inputs for the source picker, ASCII-safe and bounded.
+
+    Separate from the capability flags because ``SELECT_SOURCE`` being set
+    is not sufficient: an entity can advertise the verb and expose an empty
+    ``source_list``, and a picker with nothing in it is exactly the dead
+    affordance this module exists to prevent.
+
+    Names are ASCII-folded at the publisher because the dial fonts cannot
+    render anything else — an amp with a source called "Küche" would
+    otherwise reach the glass as tofu. Folding (not dropping) matters here:
+    ``safe_unit_for_dial`` would turn it into "Kche", which reads as a typo.
+    """
+    raw = attr.get("source_list")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        name = safe_text_for_dial(entry).strip()[:_MAX_SOURCE_LEN]
+        if name:
+            out.append(name)
+        if len(out) >= _MAX_SOURCES:
+            break
+    return out
+
+
+def now_playing_controls(attr: dict) -> dict:
+    """Capability half of a ``cmd/now_playing`` push: flags plus sources.
+
+    Mirrors ``media_face_payload`` in Helm. Callers should ``update()`` a
+    payload with this rather than calling the two halves separately, so the
+    source-picker gate below can't be skipped by accident.
+    """
+    payload = now_playing_capabilities(attr)
+    sources = now_playing_sources(attr)
+    if sources and payload.get("can_select_source"):
+        payload["sources"] = sources
+        payload["source_count"] = len(sources)
+    else:
+        # Advertising the verb without anything to pick would draw an empty
+        # picker. Drop the flag so the dial cannot offer it.
+        payload.pop("can_select_source", None)
+    return payload
 
 
 def now_playing_fields(attr: dict, entity_id: str) -> dict:

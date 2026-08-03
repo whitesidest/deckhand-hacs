@@ -22,6 +22,7 @@ copy for the full rationale.
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 # Glyphs the LVGL Montserrat firmware font can't render. We substitute
@@ -43,6 +44,57 @@ DIAL_UNIT_GLYPH_MAP: dict[str, str] = {
     " ": " ",   # THIN SPACE
     " ": " ",   # NARROW NO-BREAK SPACE
 }
+
+
+# Letters that carry meaning but do NOT decompose under NFKD, so the
+# accent-folding pass in safe_text_for_dial cannot reach them. Without
+# these, "Ærø" would reach the dial as "r" — worse than a tofu box,
+# because it looks like a real (wrong) word rather than an obvious
+# rendering failure.
+DIAL_LETTER_FOLD: dict[str, str] = {
+    "Æ": "AE",
+    "æ": "ae",
+    "Ø": "O",
+    "ø": "o",
+    "Œ": "OE",
+    "œ": "oe",
+    "ß": "ss",
+    "Đ": "D",
+    "đ": "d",
+    "Ł": "L",
+    "ł": "l",
+    "Þ": "Th",
+    "þ": "th",
+    "Ð": "D",
+    "ð": "d",
+}
+
+
+def safe_text_for_dial(text: str) -> str:
+    """ASCII-fold a human-facing string for the dial, preserving letters.
+
+    ``safe_unit_for_dial`` is for *units* — it maps a small glyph table and
+    then drops whatever is left. That is right for "µg/m³" and wrong for a
+    name: a Sonos source called "Küche" came through as "Kche", which reads
+    as a typo rather than a limitation, and an operator would reasonably
+    file it as a bug against the wrong component.
+
+    So fold first, drop second. NFKD splits an accented letter into its
+    base plus a combining mark, the marks are discarded, and the letters
+    that have no decomposition are handled by DIAL_LETTER_FOLD. "Küche" ->
+    "Kuche", "Café" -> "Cafe", "Ærø" -> "AEro".
+
+    Anything still non-ASCII after that (CJK, Cyrillic, emoji) is dropped —
+    the firmware fonts genuinely cannot render it, and a box is a worse
+    answer than a shorter string. See feedback_dial_font_ascii_only.
+    """
+    if not text:
+        return ""
+    folded = "".join(DIAL_LETTER_FOLD.get(ch, ch) for ch in text)
+    decomposed = unicodedata.normalize("NFKD", folded)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    mapped = "".join(DIAL_UNIT_GLYPH_MAP.get(ch, ch) for ch in stripped)
+    return mapped.encode("ascii", "ignore").decode("ascii")
 
 
 def safe_unit_for_dial(unit: str) -> str:
