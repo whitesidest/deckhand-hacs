@@ -102,14 +102,38 @@ class OwnsCapabilityTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_manifest_version_is_1_10_1(self):
-        # 1.10.1 = Perimeter v2 (numeric-threshold binding keys + path
-        # steering docs + update-lane value clamp).
+    """The manifest version is what HACS shows and what decides whether a
+    user's HA offers the update at all, so it must not drift from the
+    released tag.
+
+    These used to assert a hardcoded literal in two places here and a third
+    in test_perimeter_v2, with the version baked into a test NAME
+    (test_manifest_version_is_1_10_1). Every release broke three unrelated
+    tests and the name lied until someone renamed it. The literal now lives
+    once, at the top of this class, and the shape is checked separately from
+    the value.
+    """
+
+    EXPECTED_VERSION = "1.10.2"  # 1.10.2 = media capability keys on cmd/now_playing
+
+    def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(data["version"], "1.10.1")
+        self.assertEqual(data["version"], self.EXPECTED_VERSION)
+
+    def test_manifest_version_is_a_semver_triple(self):
+        """Catches a malformed bump ("1.10", "v1.10.2") without needing an
+        edit every release — HACS compares these and a bad shape means the
+        update silently never appears."""
+        data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        parts = data["version"].split(".")
+        self.assertEqual(len(parts), 3, data["version"])
+        for part in parts:
+            self.assertTrue(part.isdigit(), data["version"])
 
     def test_hacs_version_reads_manifest(self):
-        self.assertEqual(hacs_version(), "1.10.1")
+        """The helper must read the file, not carry its own copy."""
+        data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(hacs_version(), data["version"])
 
 
 # ── Source-level wiring guards ──────────────────────────────────────

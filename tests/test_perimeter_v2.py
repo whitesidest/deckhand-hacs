@@ -225,10 +225,19 @@ class ServicesSteeringTests(unittest.TestCase):
 # ── 4. Release hygiene ──────────────────────────────────────────────
 
 class ManifestVersionTests(unittest.TestCase):
-    def test_version_bumped(self):
+    def test_version_is_at_least_the_release_this_file_covers(self):
+        """Perimeter v2 shipped in 1.10.1, so anything below that means this
+        file's features are not in the built integration.
+
+        Was an equality check against "1.10.1", which turned every later
+        release into a failure in a file that has nothing to do with
+        versioning. The exact current version is asserted once, in
+        test_hacs_presence.ManifestTests.
+        """
         import json
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "1.10.1")
+        triple = tuple(int(p) for p in manifest["version"].split("."))
+        self.assertGreaterEqual(triple, (1, 10, 1), manifest["version"])
 
 
 if __name__ == "__main__":
