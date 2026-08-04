@@ -73,7 +73,10 @@ def now_playing_capabilities(attr: dict) -> dict:
     publisher would be ambiguous.
     """
     sf = attr.get("supported_features")
-    if not isinstance(sf, int):
+    # bool is a subclass of int, and True & _FEAT_PAUSE == 1 — so an
+    # integration that returns a bool here would silently light up a pause
+    # button. A bool is not a bitmask; reject it rather than decode it.
+    if not isinstance(sf, int) or isinstance(sf, bool):
         return {}
     caps = {key: True for key, bit in _CAPABILITY_BITS.items() if sf & bit}
     if sf & _PLAY_PAUSE_BITS:

@@ -212,6 +212,12 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertEqual(now_playing_capabilities({"supported_features": None}), {})
         self.assertEqual(now_playing_capabilities({"supported_features": "x"}), {})
 
+    def test_a_bool_is_not_a_bitmask(self):
+        """bool subclasses int and True & PAUSE == 1, so an integration
+        returning a bool here would silently draw a pause button."""
+        self.assertEqual(now_playing_capabilities({"supported_features": True}), {})
+        self.assertEqual(now_playing_capabilities({"supported_features": False}), {})
+
 
 class SourcePickerTests(unittest.TestCase):
     """SELECT_SOURCE being set is not enough to draw a picker."""
