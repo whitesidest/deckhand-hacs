@@ -1017,6 +1017,32 @@ add_menu_item:
       example: "ha_service"
       selector:
         text:
+    climate_min_temp:
+      name: Minimum Temperature
+      description: >
+        For ha_climate items — the coldest the dial may be turned to. Leave
+        unset to use the thermostat's own range. A range wider than the
+        thermostat supports is narrowed to fit, so the dial never offers a
+        temperature the device would refuse.
+      example: 65
+      selector:
+        number:
+          min: -50
+          max: 150
+          step: 1
+          mode: box
+    climate_max_temp:
+      name: Maximum Temperature
+      description: >
+        For ha_climate items — the warmest the dial may be turned to. Leave
+        unset to use the thermostat's own range.
+      example: 78
+      selector:
+        number:
+          min: -50
+          max: 150
+          step: 1
+          mode: box
     action_data:
       name: Action Data (advanced)
       description: >

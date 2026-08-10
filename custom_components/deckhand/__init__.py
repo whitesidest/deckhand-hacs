@@ -2290,6 +2290,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             payload["item_type"] = str(call.data["item_type"]).strip()
         if isinstance(call.data.get("action_data"), dict):
             payload["action_data"] = call.data["action_data"]
+        # Climate comfort range. Promoted to first-class fields because
+        # burying them in the action_data dict makes the commonest climate
+        # tweak an advanced operation. Explicit fields win over the same keys
+        # passed inside action_data. Helm clamps anything wider than the
+        # thermostat reports it supports.
+        for field, ad_key in (("climate_min_temp", "min_temp"), ("climate_max_temp", "max_temp")):
+            value = call.data.get(field)
+            if value is not None:
+                payload.setdefault("action_data", {})[ad_key] = int(value)
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
