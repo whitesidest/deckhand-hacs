@@ -38,13 +38,13 @@ from .const import (
     PERIMETER_TREATMENTS,
     PLATFORMS,
     TOPIC_CMD_ANNOUNCE,
-    TOPIC_CMD_CONFIG,
     TOPIC_CMD_FACE_CONFIG,
     TOPIC_CMD_FACE_MOUNT,
     TOPIC_CMD_FACE_UNMOUNT,
     TOPIC_ALARM_REQUEST,
     TOPIC_CREDENTIAL_REQUEST,
     TOPIC_SCHEDULE_REQUEST,
+    TOPIC_SETTINGS_REQUEST,
     TOPIC_MENU_REQUEST,
     TOPIC_INVITATION_REQUEST,
     TOPIC_CMD_FACE_STATE,
@@ -1804,42 +1804,135 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             len(targets), ", ".join(d for d, _ in targets),
         )
 
-    async def _set_timezone(call) -> None:
-        """Push a per-dial timezone via cmd/config.
+    async def _publish_settings_request(call, payload: dict) -> int:
+        """Shared fan-out for the per-dial settings services.
 
-        The firmware does ``setenv("TZ", value, 1); tzset()`` with whatever
-        we send, so we pre-translate the IANA name to a POSIX TZ string
-        from our static map. Unknown zones are rejected loudly rather than
-        silently shipping ``UTC0`` and confusing the user.
+        Routed through Helm (settings_request), never straight to
+        cmd/config. Helm persists to the Dial row and THEN republishes the
+        dial's complete cmd/config — which is what makes the change stick
+        and what keeps the retained payload whole. Publishing the patch
+        ourselves would set the dial on the wire while Helm's row still
+        held the old value, so the next full config push (boot re-push,
+        "Push to dial", any settings save) would quietly revert it.
+
+        retain=False: this is a request, not state. The retained slot
+        belongs to cmd/config, and Helm owns it.
         """
-        await _require_admin(call)
-        device_id = call.data.get("device_id")
-        iana = call.data.get("timezone")
-        if not isinstance(iana, str) or not iana.strip():
-            raise ServiceValidationError("timezone is required")
-        iana = iana.strip()
-        posix = _IANA_TO_POSIX.get(iana)
-        if posix is None:
-            raise ServiceValidationError(
-                f"Unsupported timezone '{iana}'. Pick one from the dropdown."
-            )
-
-        targets = _resolve_targets(hass, device_id)
+        targets = _resolve_targets(hass, call.data.get("device_id"))
         if not targets:
-            _LOGGER.warning(
-                "set_timezone: could not resolve device_id %s to any dial(s)", device_id
-            )
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps({"tz": posix})
+        body = json.dumps(payload)
         for dial_id, team_id in targets:
-            topic = TOPIC_CMD_CONFIG.format(team_id=team_id, dial_id=dial_id)
-            await mqtt.async_publish(hass, topic, body)
+            topic = TOPIC_SETTINGS_REQUEST.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body, qos=1, retain=False)
+        return len(targets)
+
+    async def _set_timezone(call) -> None:
+        """Set a per-dial timezone.
+
+        Takes an IANA name and hands it to Helm as ``timezone``. Helm
+        writes ``Dial.timezone`` and does the IANA → POSIX translation
+        itself when it builds cmd/config (the firmware does
+        ``setenv("TZ", value, 1); tzset()`` and cannot parse IANA).
+
+        This used to publish ``{"tz": posix}`` directly to cmd/config,
+        which never reached Helm's database: the Dial row kept the old
+        zone and the next full config push silently put it back. The
+        service name and schema are unchanged so existing automations
+        keep working — only the destination moved.
+
+        The zone is still validated here against the local map so the user
+        gets a real error in the HA UI. The settings plane has no ack, so
+        a zone Helm rejects would otherwise fail in silence.
+        """
+        await _require_admin(call)
+        iana = call.data.get("timezone")
+        if not isinstance(iana, str) or not iana.strip():
+            raise ServiceValidationError("timezone is required")
+        iana = iana.strip()
+        if iana not in _IANA_TO_POSIX:
+            raise ServiceValidationError(
+                f"Unsupported timezone '{iana}'. Pick one from the dropdown."
+            )
+
+        n = await _publish_settings_request(call, {"timezone": iana})
+        _LOGGER.info("set_timezone: %s → %d dial(s)", iana, n)
+
+    async def _set_dial_settings(call) -> None:
+        """Set any subset of a dial's sticky settings in one call.
+
+        SF SetDialSettings / REST ``/dials/{id}/settings/`` parity. Every
+        field is optional; only the ones supplied are sent, so an
+        automation can nudge one setting without disturbing the rest.
+
+        Validation happens twice on purpose. Helm validates atomically and
+        is the authority, but this plane carries no ack — a rejected
+        request is a line in Helm's log the HA user will never see. So the
+        obvious mistakes are caught here where HA can show a real error.
+        """
+        await _require_admin(call)
+
+        payload: dict[str, Any] = {}
+
+        for key, allowed in (
+            ("clock_face_pref", ("auto", "digital", "analog", "both")),
+            ("clock_format", ("12h", "24h")),
+        ):
+            raw = call.data.get(key)
+            if raw is None:
+                continue
+            value = str(raw).strip().lower()
+            if value not in allowed:
+                raise ServiceValidationError(
+                    f"{key} must be one of {', '.join(allowed)} (got '{value}')."
+                )
+            payload[key] = value
+
+        if call.data.get("timezone") is not None:
+            iana = str(call.data["timezone"]).strip()
+            # "" is legal — it means "inherit the team default".
+            if iana and iana not in _IANA_TO_POSIX:
+                raise ServiceValidationError(
+                    f"Unsupported timezone '{iana}'. Pick one from the dropdown."
+                )
+            payload["timezone"] = iana
+
+        if call.data.get("label") is not None:
+            label = str(call.data["label"]).strip()
+            if len(label) > 64:
+                raise ServiceValidationError(
+                    f"label must be at most 64 characters (got {len(label)})."
+                )
+            payload["label"] = label
+
+        if call.data.get("haptic_intensity") is not None:
+            try:
+                intensity = int(call.data["haptic_intensity"])
+            except (TypeError, ValueError):
+                raise ServiceValidationError(
+                    "haptic_intensity must be an integer 0-3."
+                ) from None
+            if not 0 <= intensity <= 3:
+                raise ServiceValidationError(
+                    f"haptic_intensity must be between 0 and 3 (got {intensity})."
+                )
+            payload["haptic_intensity"] = intensity
+
+        for key in ("hide_label", "haptic_encoder", "haptic_notify", "haptic_confirm"):
+            if call.data.get(key) is not None:
+                payload[key] = bool(call.data[key])
+
+        if not payload:
+            raise ServiceValidationError(
+                "set_dial_settings needs at least one setting to change."
+            )
+
+        n = await _publish_settings_request(call, payload)
         _LOGGER.info(
-            "Set timezone for %d dial(s): %s (%s)",
-            len(targets), iana, posix,
+            "set_dial_settings: %s → %d dial(s)", ", ".join(sorted(payload)), n
         )
 
     async def _set_sunset(call) -> None:
@@ -2833,6 +2926,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "update_sensor_value", _update_sensor_value)
     if not hass.services.has_service(DOMAIN, "set_timezone"):
         hass.services.async_register(DOMAIN, "set_timezone", _set_timezone)
+    if not hass.services.has_service(DOMAIN, "set_dial_settings"):
+        hass.services.async_register(DOMAIN, "set_dial_settings", _set_dial_settings)
     if not hass.services.has_service(DOMAIN, "set_sunset"):
         hass.services.async_register(DOMAIN, "set_sunset", _set_sunset)
     if not hass.services.has_service(DOMAIN, "mount_perimeter_pulse"):

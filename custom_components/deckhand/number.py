@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, TOPIC_CMD_CONFIG
+from .const import DOMAIN, TOPIC_CMD_OVERLAY
 from .entity import DeckhandEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,13 +68,37 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
         self._attr_native_value = 80.0  # Reasonable default (0-100 scale)
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set the brightness value — publishes MQTT config command."""
+        """Set the brightness value — publishes a theme-brightness overlay.
+
+        This published ``{"brightness": N}`` to ``cmd/config`` until
+        2026-08. The firmware's cmd/config handler does not read
+        ``brightness`` at ALL — it reads clock_format, clock_face_pref,
+        label, hide_label, tz, the haptics and the NFC fields, and
+        nothing else — so the slider moved in Home Assistant and the dial
+        never changed. ``brightness`` is handled by
+        apply_display_overlay(), which is reached from cmd/theme and
+        cmd/overlay only.
+
+        cmd/overlay is the right destination of the two: cmd/theme would
+        also repaint the palette. A bare brightness overlay carries no
+        ``home_face``/``home_mode`` and no ``ttl_s``, so the firmware
+        classifies it as neither a face launch nor a home-face change and
+        leaves that state alone (see the overlay handler's comment: "a
+        subtitle flash or brightness bump is neither"). The firmware
+        persists the value to NVS itself, so it survives a reboot.
+
+        Note this is THEME brightness — a 0-100% scale on the panel's
+        normal level — not the operator's power profile
+        (dim_brightness / full_brightness), which lives on Helm's Dial row
+        and travels on cmd/power_config. Helm has no field for this one,
+        so there is no row to persist to and nothing that reverts it.
+        """
         store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         team_id = store.get("team_id", "1")
-        topic = TOPIC_CMD_CONFIG.format(team_id=team_id, dial_id=self._dial_id)
+        topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=self._dial_id)
 
         await mqtt.async_publish(
-            self.hass, topic, json.dumps({"brightness": int(value)})
+            self.hass, topic, json.dumps({"brightness": int(value)}), qos=1, retain=False
         )
         self._attr_native_value = value
         self.async_write_ha_state()
