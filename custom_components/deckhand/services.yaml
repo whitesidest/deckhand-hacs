@@ -299,11 +299,15 @@ set_timezone:
   name: Set Timezone
   description: >
     Set the per-dial timezone. Accepts an IANA name (e.g.
-    "America/Los_Angeles") which is converted to a POSIX TZ string
-    before being published over MQTT — the firmware passes that string
-    straight to setenv("TZ", ...) so the clock face and any time
-    rendering immediately reflect the new zone. Schedules continue to
-    fire correctly because the wire format is epoch.
+    "America/Los_Angeles"). Routed through Helm, which records it against
+    the dial and converts it to the POSIX TZ string the firmware passes
+    straight to setenv("TZ", ...), so the clock face and any time
+    rendering immediately reflect the new zone — and the change survives
+    the next full config push. Schedules continue to fire correctly
+    because the wire format is epoch.
+
+    Equivalent to the "timezone" field of Set Dial Settings; kept as its
+    own service so existing automations keep working.
   fields:
     device_id:
       name: Device
@@ -355,6 +359,156 @@ set_timezone:
             - "Australia/Sydney"
             - "Australia/Melbourne"
             - "Pacific/Auckland"
+
+set_dial_settings:
+  name: Set Dial Settings
+  description: >
+    Change any subset of a dial's sticky settings in one call — clock
+    face and format, label, timezone and haptics. Every field is
+    optional; only the ones you fill in are sent, so an automation can
+    nudge a single setting without disturbing the rest.
+
+    Routed through Helm, which writes the values to the dial's record and
+    then republishes the dial's complete configuration. That is what
+    makes a change stick: settings pushed straight at the hardware are
+    overwritten the next time Helm pushes a full config (on boot, on
+    "Push to dial", or on any settings save).
+
+    Validation is all-or-nothing — if one field is invalid, nothing is
+    applied.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        The Deckhand dial device(s) to configure. You can pick several
+        dials, a Room, or type the special id "all" (YAML mode) to target
+        every dial.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    clock_face_pref:
+      name: Clock Face
+      description: >
+        Auto follows the active theme's recommendation. Digital forces
+        the numerals; Analog forces the hands on any theme that supports
+        them; Both renders hands and numerals together.
+      required: false
+      example: "analog"
+      selector:
+        select:
+          options:
+            - label: "Auto (theme default)"
+              value: "auto"
+            - label: "Digital"
+              value: "digital"
+            - label: "Analog"
+              value: "analog"
+            - label: "Both (hybrid)"
+              value: "both"
+    clock_format:
+      name: Clock Format
+      description: 12- or 24-hour numerals on the digital face.
+      required: false
+      example: "12h"
+      selector:
+        select:
+          options:
+            - label: "12-hour"
+              value: "12h"
+            - label: "24-hour"
+              value: "24h"
+    label:
+      name: Label
+      description: >
+        Display name shown above the clock. Leave empty to fall back to
+        the dial's hardware id. Max 64 characters.
+      required: false
+      example: "Galley"
+      selector:
+        text:
+    hide_label:
+      name: Hide Label
+      description: >
+        Suppress the label above the clock entirely, for a completely
+        clean face.
+      required: false
+      selector:
+        boolean:
+    timezone:
+      name: IANA Timezone
+      description: >
+        IANA name like "America/New_York". Converted to the firmware's
+        POSIX TZ format by Helm.
+      required: false
+      example: "America/New_York"
+      selector:
+        select:
+          options:
+            - "UTC"
+            - "America/Los_Angeles"
+            - "America/Vancouver"
+            - "America/Denver"
+            - "America/Phoenix"
+            - "America/Chicago"
+            - "America/Mexico_City"
+            - "America/New_York"
+            - "America/Toronto"
+            - "America/Anchorage"
+            - "America/Sao_Paulo"
+            - "Pacific/Honolulu"
+            - "Europe/London"
+            - "Europe/Paris"
+            - "Europe/Berlin"
+            - "Europe/Madrid"
+            - "Europe/Rome"
+            - "Europe/Amsterdam"
+            - "Europe/Stockholm"
+            - "Europe/Athens"
+            - "Africa/Cairo"
+            - "Africa/Johannesburg"
+            - "Asia/Dubai"
+            - "Asia/Kolkata"
+            - "Asia/Singapore"
+            - "Asia/Hong_Kong"
+            - "Asia/Shanghai"
+            - "Asia/Seoul"
+            - "Asia/Tokyo"
+            - "Australia/Perth"
+            - "Australia/Brisbane"
+            - "Australia/Sydney"
+            - "Australia/Melbourne"
+            - "Pacific/Auckland"
+    haptic_intensity:
+      name: Haptic Intensity
+      description: 0 = off, 1 = light, 2 = normal, 3 = strong.
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 0
+          max: 3
+          step: 1
+          mode: slider
+    haptic_encoder:
+      name: Haptic Encoder Ticks
+      description: Buzz on each detent as the knob is turned.
+      required: false
+      selector:
+        boolean:
+    haptic_notify:
+      name: Haptic Notification Buzz
+      description: Buzz when a notification arrives.
+      required: false
+      selector:
+        boolean:
+    haptic_confirm:
+      name: Haptic Action Confirmation
+      description: Buzz when a touch-and-hold action commits.
+      required: false
+      selector:
+        boolean:
 
 set_sunset:
   name: Set Sunset (Sundowner)

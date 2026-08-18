@@ -85,6 +85,16 @@ TOPIC_MENU_REQUEST = "deckhand/{team_id}/dial/{dial_id}/menu_request"
 # Alarm lifecycle (create/enable/disable/snooze/dismiss) — consumed by
 # Helm's MQTT listener (handle_alarm_request). SF-invocable parity.
 TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"
+# Per-dial settings (clock face/format, label, timezone, haptics) — Helm
+# handle_settings_request. SF SetDialSettings / REST parity.
+#
+# This MUST go through Helm rather than straight to cmd/config. Helm's
+# Dial row is the source of truth for every one of these keys: it rebuilds
+# the COMPLETE cmd/config from the row on boot, on "Push to dial", and on
+# any settings save. A publish that skips the row therefore holds only
+# until the next full push, then silently reverts — which is exactly what
+# the old set_timezone did.
+TOPIC_SETTINGS_REQUEST = "deckhand/{team_id}/dial/{dial_id}/settings_request"
 # Credential lifecycle (enroll/revoke/restore) — Helm handle_credential_request.
 TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"
 # Schedule lifecycle (create/enable/disable/fire) — Helm handle_schedule_request.

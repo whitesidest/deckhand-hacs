@@ -126,6 +126,7 @@ REQUIRED_SERVICES = frozenset({
     "send_invitation",
     "cancel_invitation",
     "set_timezone",
+    "set_dial_settings",
     "set_sunset",
     "update_now_playing",
     "update_sensor_value",
@@ -1151,6 +1152,150 @@ class PerimeterBindingShapingTests(unittest.TestCase):
     def test_opacity_out_of_range_dropped(self):
         self.assertNotIn("opacity", self.build({"id": "x", "opacity": 1.5}))
         self.assertEqual(self.build({"id": "x", "opacity": 0.4})["opacity"], 0.4)
+
+
+class DialSettingsServiceTests(unittest.TestCase):
+    """Pin the generic per-dial settings surface (2026-08-17).
+
+    The wire is deliberately GENERIC — a flat patch of only the keys being
+    changed, validated once on Helm — while HA gets TYPED fields so the
+    service renders in the UI. This pins the typed half.
+    """
+
+    FIELDS = frozenset({
+        "device_id",
+        "clock_face_pref",
+        "clock_format",
+        "label",
+        "hide_label",
+        "timezone",
+        "haptic_intensity",
+        "haptic_encoder",
+        "haptic_notify",
+        "haptic_confirm",
+    })
+
+    def test_service_declares_every_field(self):
+        services = _load_services()
+        self.assertIn("set_dial_settings", services)
+        declared = set((services["set_dial_settings"].get("fields") or {}).keys())
+        missing = self.FIELDS - declared
+        self.assertFalse(missing, f"set_dial_settings missing fields: {sorted(missing)}")
+
+    def test_handler_reads_every_field(self):
+        """Declaration and parsing must not drift — a field in the UI that
+        the handler never reads is a silently ignored control."""
+        src = _load_init_text()
+        handler = src.split("async def _set_dial_settings(call)")[1].split("\n    async def ")[0]
+        for field in self.FIELDS - {"device_id"}:
+            self.assertIn(f'"{field}"', handler, f"_set_dial_settings ignores '{field}'")
+
+    def test_handler_registered(self):
+        self.assertIn('"set_dial_settings"', _load_init_text())
+
+    def test_settings_request_topic_shape(self):
+        const = (ROOT / "custom_components" / "deckhand" / "const.py").read_text()
+        self.assertIn(
+            'TOPIC_SETTINGS_REQUEST = "deckhand/{team_id}/dial/{dial_id}/settings_request"',
+            const,
+        )
+
+    def test_optional_fields_are_not_required(self):
+        """Every setting is optional so an automation can change one thing.
+        Only the target is mandatory."""
+        fields = _load_services()["set_dial_settings"]["fields"]
+        self.assertTrue(fields["device_id"].get("required"))
+        for name in self.FIELDS - {"device_id"}:
+            self.assertFalse(
+                fields[name].get("required", False),
+                f"{name} must stay optional — a partial patch is the whole point",
+            )
+
+    def test_timezone_selector_matches_the_supported_zone_map(self):
+        """The dropdown is only useful if every option is a zone Helm will
+        actually accept — an unlisted zone is rejected server-side with no
+        ack to surface it."""
+        services = _load_services()
+        src = _load_init_text()
+        supported = set(re.findall(
+            r'"([^"]+)":',
+            src.split("_IANA_TO_POSIX = {")[1].split("\n}")[0],
+        ))
+        for svc in ("set_timezone", "set_dial_settings"):
+            options = (
+                services[svc]["fields"]["timezone"]["selector"]["select"]["options"]
+            )
+            self.assertTrue(options, f"{svc} timezone selector has no options")
+            self.assertFalse(
+                set(options) - supported,
+                f"{svc} offers zones the integration cannot translate: "
+                f"{sorted(set(options) - supported)}",
+            )
+
+
+class SettingsNeverBypassHelmTests(unittest.TestCase):
+    """Settings must reach the dial THROUGH Helm, never via cmd/config.
+
+    Two live bugs of this shape, found 2026-08-17:
+
+      * ``set_timezone`` published ``{"tz": posix}`` straight to
+        ``cmd/config``. Helm's Dial row kept the old zone, so the next
+        full config push — boot re-push, "Push to dial", any settings
+        save — silently reverted it.
+      * the brightness ``number`` entity published ``{"brightness": N}``
+        to ``cmd/config``, a key that handler does not read at all, so
+        the slider moved and the dial never did.
+
+    ``cmd/config`` is Helm's topic. It is retained and last-write-wins and
+    Helm rebuilds it in full from the database; anything the integration
+    writes there is either ignored or transient. This test is the guard.
+    """
+
+    SETTINGS_HANDLERS = ("_set_timezone", "_set_dial_settings", "_publish_settings_request")
+
+    def _handler_body(self, src: str, name: str) -> str:
+        return src.split(f"async def {name}(call")[1].split("\n    async def ")[0]
+
+    def test_settings_handlers_publish_only_to_settings_request(self):
+        src = _load_init_text()
+        for name in self.SETTINGS_HANDLERS:
+            body = self._handler_body(src, name)
+            self.assertNotIn(
+                "TOPIC_CMD_CONFIG", body,
+                f"{name} publishes to cmd/config — it must go through Helm "
+                f"(TOPIC_SETTINGS_REQUEST) so the Dial row is the source of truth",
+            )
+        # Positive control: the shared fan-out really does use the topic.
+        self.assertIn(
+            "TOPIC_SETTINGS_REQUEST",
+            self._handler_body(src, "_publish_settings_request"),
+        )
+
+    def test_no_component_publishes_to_cmd_config(self):
+        """Nothing in the integration should write cmd/config any more.
+
+        The constant survives in const.py as documentation of the topic
+        Helm owns; importing it into a platform is the smell.
+        """
+        component = ROOT / "custom_components" / "deckhand"
+        offenders = [
+            path.name
+            for path in sorted(component.glob("*.py"))
+            if path.name != "const.py" and "TOPIC_CMD_CONFIG" in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(
+            offenders, [],
+            f"these modules still publish to Helm's cmd/config topic: {offenders}",
+        )
+
+    def test_brightness_number_uses_the_overlay_topic(self):
+        """cmd/config's handler never reads ``brightness``; the overlay
+        handler does. Publishing it to cmd/config was a no-op on-device."""
+        number_src = (ROOT / "custom_components" / "deckhand" / "number.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("TOPIC_CMD_OVERLAY", number_src)
+        self.assertNotIn("TOPIC_CMD_CONFIG", number_src)
 
 
 if __name__ == "__main__":
