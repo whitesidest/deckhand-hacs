@@ -45,6 +45,7 @@ now_playing_fields = _np.now_playing_fields
 now_playing_capabilities = _np.now_playing_capabilities
 now_playing_sources = _np.now_playing_sources
 now_playing_controls = _np.now_playing_controls
+now_playing_is_cold = _np.now_playing_is_cold
 
 
 class NowPlayingFieldsTests(unittest.TestCase):
@@ -267,6 +268,60 @@ class SourcePickerTests(unittest.TestCase):
     def test_bad_source_list_shape(self):
         self.assertEqual(now_playing_sources({}), [])
         self.assertEqual(now_playing_sources({"source_list": "Aux"}), [])
+
+
+class ColdPlayerTests(unittest.TestCase):
+    """The "Turn On" affordance for a player with nothing loaded (helm#319).
+
+    Must agree key-for-key with Helm's ``media_face_payload``: both systems
+    push cmd/now_playing, so a disagreement means the dial's button set
+    changes depending on who published last — the asymmetry the whole
+    capability pairing exists to remove.
+    """
+
+    PLAYING = {"supported_features": PLAY | PAUSE, "media_title": "Blue in Green"}
+    COLD = {"supported_features": PLAY | PAUSE}
+
+    def test_a_cold_player_offers_turn_on(self):
+        self.assertTrue(now_playing_controls(self.COLD)["can_turn_on"])
+
+    def test_a_loaded_track_does_not(self):
+        """Paused mid-track is NOT cold — its play button works, and a
+        second competing "start" control beside it would be noise."""
+        self.assertNotIn("can_turn_on", now_playing_controls(self.PLAYING))
+
+    def test_an_off_speaker_still_advertises_play_pause(self):
+        """Why title, not supported_features, decides this. An off zone
+        keeps PLAY and PAUSE set, so the bits cannot tell "paused on a
+        track" from "powered down"."""
+        out = now_playing_controls(self.COLD)
+        self.assertTrue(out["can_play_pause"], "premise: the bits look identical")
+        self.assertTrue(out["can_turn_on"], "so title is what separates them")
+
+    def test_an_empty_string_title_counts_as_cold(self):
+        self.assertTrue(now_playing_is_cold({"media_title": ""}))
+        self.assertTrue(now_playing_is_cold({}))
+        self.assertFalse(now_playing_is_cold({"media_title": "So What"}))
+
+    def test_it_reads_the_raw_title_not_the_resolved_one(self):
+        """now_playing_fields can synthesize a display title from a short
+        media_content_id (test_short_content_id_backfills_empty_title). If
+        coldness read that resolved value, HACS and Helm would answer
+        differently for the same entity. Display text and "is anything
+        loaded" are different questions, and only the raw field is shared.
+        """
+        attr = {"media_content_id": "track42", "supported_features": PLAY}
+        self.assertTrue(now_playing_is_cold(attr))
+        self.assertTrue(now_playing_controls(attr)["can_turn_on"])
+
+    def test_a_cold_player_can_still_offer_its_inputs(self):
+        """The founder's decision on helm#319 was BOTH — the wake action and
+        the source picker, not one or the other."""
+        out = now_playing_controls(
+            {"supported_features": SELECT_SOURCE, "source_list": ["Aux", "Phono"]}
+        )
+        self.assertTrue(out["can_turn_on"])
+        self.assertEqual(out["sources"], ["Aux", "Phono"])
 
 
 if __name__ == "__main__":

@@ -112,6 +112,31 @@ def now_playing_sources(attr: dict) -> list[str]:
     return out
 
 
+def now_playing_is_cold(attr: dict) -> bool:
+    """Is this player sitting with no track loaded at all? (helm#319)
+
+    Mirrors ``is_cold`` in Helm's ``media_capabilities``. "Cold" is not
+    "paused": a paused track has a ``media_title`` and a working play
+    button, and the dial should keep the transport it already draws. A
+    player with no title has nothing loaded — the speaker is off, or idle
+    since the last thing finished — and that is the state the Audio face
+    had no answer for.
+
+    Keyed on ``media_title`` and not on the entity state, because an
+    off/idle zone still advertises PLAY and PAUSE in ``supported_features``:
+    the capability bits genuinely cannot tell the two apart, which is why
+    pressing play on a dark AmpliPi zone acks and does nothing.
+
+    Deliberately the RAW ``media_title``, not the title
+    ``now_playing_fields`` resolves. That resolver can synthesize a display
+    title from ``media_content_id`` or ``media_album_name``, and if this
+    read the resolved value the two publishers would answer differently for
+    the same entity — the asymmetry the pairing rule below exists to
+    prevent. Display text and "is anything loaded" are different questions.
+    """
+    return not attr.get("media_title")
+
+
 def now_playing_controls(attr: dict) -> dict:
     """Capability half of a ``cmd/now_playing`` push: flags plus sources.
 
@@ -128,6 +153,17 @@ def now_playing_controls(attr: dict) -> dict:
         # Advertising the verb without anything to pick would draw an empty
         # picker. Drop the flag so the dial cannot offer it.
         payload.pop("can_select_source", None)
+    # helm#319 — the "Turn On" affordance for a cold player. Same only-true-
+    # keys rule as every other flag here: absent means no, so a dial on
+    # older firmware just renders today's face.
+    #
+    # No ``not_playing_action`` counterpart from this side. That string is
+    # configured per ha_media MENU ITEM in Helm and HACS has no menu items,
+    # so a HACS-pushed cold face falls back to the firmware default
+    # ("media_wake") — which is the action an operator wiring a single
+    # automation would use anyway. See docs/now_playing_turn_on.md.
+    if now_playing_is_cold(attr):
+        payload["can_turn_on"] = True
     return payload
 
 

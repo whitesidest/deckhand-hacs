@@ -114,6 +114,84 @@ automation:
           entity_id: light.living_room
 ```
 
+## Waking a cold speaker from the Audio face
+
+Opening the Audio face while nothing is playing used to hand the operator
+a screen they could not use. Every control on it targeted a media_player
+that silently no-ops while the speaker is off — Home Assistant answers the
+service call, the amp stays dark, and there is no way to tell that from a
+broken integration.
+
+So a **cold** player — one with no `media_title` loaded, as opposed to one
+merely paused mid-track — draws a single **Turn On** control instead of the
+transport row. Pressing it publishes an ordinary dial event carrying an
+action string, and an automation you own decides what "on" means for that
+room. The default action is `media_wake`.
+
+Like an NFC tap, this arrives on the HA bus by up to two paths with
+**different shapes**, so pick the one your setup actually has:
+
+**Helm-relayed (flat).** If the dials are managed by Helm, it relays the
+event with the fields at the top level — filterable directly in
+`event_data`:
+
+```yaml
+automation:
+  - alias: "Deckhand: wake the office speakers"
+    trigger:
+      - platform: event
+        event_type: deckhand_dial_event
+        event_data:
+          event_type: "button_press"
+          action: "media_wake"
+          dial_id: "DECK-3140"
+    action:
+      - service: switch.turn_on
+        target: {entity_id: switch.office_amp}
+      - service: media_player.select_source
+        target: {entity_id: media_player.office}
+        data: {source: "Spotify"}
+      - service: media_player.media_play
+        target: {entity_id: media_player.office}
+```
+
+**This integration's raw re-fire (nested).** Fired straight off MQTT, so
+the dial's own envelope is preserved under `payload` and `type` replaces
+`event_type`. Trigger on the outer keys and branch in a condition:
+
+```yaml
+automation:
+  - alias: "Deckhand: wake the speakers (MQTT-direct)"
+    trigger:
+      - platform: event
+        event_type: deckhand_dial_event
+        event_data:
+          type: "button_press"
+    condition:
+      - "{{ trigger.event.data.payload.action == 'media_wake' }}"
+    action:
+      - service: media_player.turn_on
+        target: {entity_id: "{{ trigger.event.data.payload.item_id }}" }
+```
+
+Both carry `item_id` — the media_player entity the face was showing — so an
+automation can key off the player instead of the dial where that reads
+better. Routing by `dial_id` lets one automation serve every room.
+
+`media_wake` is the default. Helm can override it per menu item
+("Turn-On Action" on an `ha_media` item) when one room needs its own
+automation; dials driven from this integration alone always send the
+default, so wiring that single action covers them.
+
+The dial deliberately does **not** claim the music started. It publishes
+the action, buzzes, and waits for the next `cmd/now_playing` to say so — a
+wake that fails looks like a wake that failed, rather than a face that
+flickers into "now playing" and back.
+
+Where the player also exposes selectable inputs, the cold face keeps the
+source picker on a swipe up, so the operator can jump straight to an input
+instead of firing the automation.
+
 ## NFC taps in automations
 
 When a card is tapped on a dial's NFC reader, a `deckhand_dial_event`
