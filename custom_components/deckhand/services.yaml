@@ -1197,6 +1197,23 @@ add_menu_item:
           max: 150
           step: 1
           mode: box
+    activation_mode:
+      name: Activation
+      description: >
+        How the item commits on the dial. "click" is a single tap and is
+        the default. "hold" opens a short press-and-hold screen — a
+        deliberate second gesture that twisting cancels — for items you
+        do not want a brush past the dial to fire, like starting a
+        coffee maker.
+      example: "hold"
+      default: "click"
+      selector:
+        select:
+          options:
+            - label: Single click
+              value: click
+            - label: Press and hold
+              value: hold
     action_data:
       name: Action Data (advanced)
       description: >

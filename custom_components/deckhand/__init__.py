@@ -2381,6 +2381,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             payload["ttl_s"] = int(ttl)
         if call.data.get("item_type"):
             payload["item_type"] = str(call.data["item_type"]).strip()
+        # How the item commits on the dial. Helm validates the value and
+        # falls back to "click" on anything it does not recognise, so an
+        # unknown mode degrades to the old behaviour rather than failing
+        # the whole add.
+        if call.data.get("activation_mode"):
+            payload["activation_mode"] = str(call.data["activation_mode"]).strip().lower()
         if isinstance(call.data.get("action_data"), dict):
             payload["action_data"] = call.data["action_data"]
         # Climate comfort range. Promoted to first-class fields because
