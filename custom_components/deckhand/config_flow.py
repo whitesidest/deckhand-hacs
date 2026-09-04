@@ -71,16 +71,38 @@ class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_mqtt(
-        self, discovery_info: dict[str, Any]
-    ) -> ConfigFlowResult:
+    async def async_step_mqtt(self, discovery_info: Any) -> ConfigFlowResult:
         """Handle MQTT discovery.
 
         When HA's MQTT integration receives a message on deckhand/+/dial/+/status,
         it triggers this flow automatically (via the 'mqtt' key in manifest.json).
+
+        ``discovery_info`` is HA's ``MqttServiceInfo`` DATACLASS on current
+        cores. It used to be a plain dict, and this handler called ``.get()``
+        on it — which raises AttributeError against a dataclass.
+
+        That is expensive here in a way it would not be elsewhere. This
+        integration subscribes to ``deckhand/+/dial/+/status``, so EVERY status
+        message from EVERY dial enters this flow, and HA builds a full
+        traceback on MainThread for each one. A normal fleet produced ~18
+        tracebacks per minute — 16,325 in 16 hours, 65% of every line in the
+        core log (reported 2026-09-04).
+
+        Read defensively rather than switching to a bare ``.topic``: the
+        manifest still declares support back to HA 2024.1.0, where this really
+        was a dict, and getattr costs nothing. Deliberately NOT importing
+        MqttServiceInfo for this — it has moved between
+        ``homeassistant.components.mqtt`` and
+        ``homeassistant.helpers.service_info.mqtt`` across the supported
+        range, and a bad import here fails the whole config flow at load,
+        which is strictly worse than the bug it would be fixing.
         """
         # Extract team_id from the topic
-        topic = discovery_info.get("topic", "")
+        topic = getattr(discovery_info, "topic", None)
+        if topic is None and isinstance(discovery_info, dict):
+            # Pre-dataclass cores (and the unit tests' fixtures).
+            topic = discovery_info.get("topic", "")
+        topic = topic or ""
         parts = topic.split("/")
         if len(parts) >= 2:
             team_id = parts[1]

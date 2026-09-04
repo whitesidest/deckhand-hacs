@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.10.2"  # 1.10.2 = media capability keys on cmd/now_playing
+    EXPECTED_VERSION = "1.13.1"  # 1.13.1 = MQTT discovery_info dataclass fix (no .get() on MqttServiceInfo)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
