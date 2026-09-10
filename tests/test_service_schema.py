@@ -543,7 +543,8 @@ class QuietInvitationTests(unittest.TestCase):
         # tests actually exercise (helm#224 added _resolve_transition).
         helpers = [
             n for n in tree.body
-            if isinstance(n, ast.FunctionDef) and n.name in ("_resolve_transition",)
+            if isinstance(n, ast.FunctionDef)
+            and n.name in ("_resolve_transition", "_announcement_duration_s")
         ]
 
         publishes: list[tuple] = []
@@ -570,7 +571,18 @@ class QuietInvitationTests(unittest.TestCase):
             return None
 
         targets = [("DECK-AAAA", "team-1"), ("DECK-BBBB", "team-1")]
+
+        # The REAL emoji stripper, loaded from its module by path (it has no
+        # package-relative imports), so handler runs exercise the rule that
+        # actually ships rather than a stub.
+        import importlib.util
+
+        _spec = importlib.util.spec_from_file_location("dial_text", INIT_PY.parent / "dial_text.py")
+        _dial_text = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_dial_text)
+
         ns: dict = {
+            "strip_emoji_for_dial": _dial_text.strip_emoji_for_dial,
             "Any": Any,
             "json": _json,
             "mqtt": _Mqtt,
