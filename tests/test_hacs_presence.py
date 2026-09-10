@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.13.1"  # 1.13.1 = MQTT discovery_info dataclass fix (no .get() on MqttServiceInfo)
+    EXPECTED_VERSION = "1.14.0"  # 1.14.0 = announcements stay until touched; emoji stripped
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
