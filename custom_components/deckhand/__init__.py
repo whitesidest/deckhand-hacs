@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - defensive fallback
     class NoURLAvailableError(Exception):  # type: ignore[no-redef]
         """Fallback when helpers.network is unavailable."""
 
+from .dial_text import strip_emoji_for_dial
 from .const import (
     CONF_MEDIA_PLAYER_BINDINGS,
     CONF_TEAM_ID,
@@ -1219,9 +1220,20 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         """
         await _require_admin(call)
         device_id = call.data.get("device_id")
-        message = call.data.get("message")
-        from_name = call.data.get("from_name", "Home Assistant")
-        duration = call.data.get("duration", 30)
+        # Emoji have no glyph in any dial font and arrive as tofu boxes. HACS
+        # publishes straight to the broker, so Helm's publisher-side strip
+        # never sees these — the same rule has to live here. See dial_text.
+        message = strip_emoji_for_dial(call.data.get("message"))
+        from_name = strip_emoji_for_dial(call.data.get("from_name", "Home Assistant"))
+        # No duration means "stay until someone touches the dial". The dial
+        # already treats duration_s == 0 that way — its auto-dismiss is
+        # `announce_duration > 0 && elapsed > announce_duration` — so this is
+        # purely about not inventing a timeout the caller never asked for. It
+        # used to default to 30s here AND pre-fill 30 in the UI form.
+        #
+        # Empty counts as absent: a script passing `duration: "{{ var }}"`
+        # with `var` unset renders "", and int("") would fail the whole call.
+        duration = _announcement_duration_s(call.data.get("duration"))
         animation = call.data.get("animation", "none")
         transition = _resolve_transition(call.data.get("transition"))
         snapshot_entity = call.data.get("snapshot_entity")
@@ -3157,6 +3169,17 @@ def _resolve_all_dials(hass: HomeAssistant) -> list[tuple[str, str]]:
                 out.append((dial_id, str(team_id)))
     return out
 
+
+
+def _announcement_duration_s(value) -> int:
+    """Seconds an announcement stays up; 0 means until touched.
+
+    Absent, None or blank -> 0. The dial's auto-dismiss only runs when the
+    duration is positive, so 0 holds it until someone touches the dial.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return 0
+    return max(0, int(float(value)))
 
 def _resolve_transition(raw: Any) -> str:
     """Validate a service call's ``transition`` field (helm#224).
