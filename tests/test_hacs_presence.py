@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.14.2"  # 1.14.2 = emoji stripped from every service that sends dial text (helm#399)
+    EXPECTED_VERSION = "1.14.3"  # 1.14.3 = update_perimeter_state can drive the perimeter_ring overlay (helm#415); source names sent byte-exact (helm#410)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

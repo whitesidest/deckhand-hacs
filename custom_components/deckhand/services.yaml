@@ -1005,10 +1005,12 @@ mount_perimeter_pulse:
 update_perimeter_state:
   name: Update Perimeter State
   description: >
-    Push state for one or more Perimeter Pulse bindings. Use this from
+    Push state for one or more perimeter ring bindings. Use this from
     HA automations: when a lock unlocks, when a motion sensor trips,
     when a temperature changes. Set "event: true" to trigger ripple /
-    flash animation for that frame.
+    flash animation for that frame. Updates the Perimeter Pulse face by
+    default; set layer to "ring" to update a perimeter ring overlay
+    drawn around a sensor, clock or charge face instead.
 
     This is the live lane for HACS-mounted (self-driven) rings. For
     numeric sensors, compute the state string with a template, e.g.
@@ -1043,6 +1045,25 @@ update_perimeter_state:
           value: 0.62
       selector:
         object:
+    layer:
+      name: Ring layer
+      description: >
+        Which ring the update is for. "pulse" (the default, and the only
+        target before 1.14.3) is the Perimeter Pulse face. "ring" is the
+        perimeter ring overlay drawn around another face (a sensor, clock
+        or charge face with a perimeter ring). The integration can't see
+        which one a dial is showing, so pick the one you mounted. There is
+        no "both": the dial sends a state that isn't for its overlay to
+        its main face, so a second copy would reach the Perimeter Pulse
+        face twice instead of being ignored.
+      required: false
+      default: "pulse"
+      example: "ring"
+      selector:
+        select:
+          options:
+            - "pulse"
+            - "ring"
 
 mount_face:
   name: Mount Face (Generic)
