@@ -4,7 +4,9 @@ Mirrors ``strip_emoji_for_dial`` in Helm (``helm/apps/utils/dial_units.py``).
 HACS publishes ``cmd/announce`` straight to the broker, never through Helm's
 REST API, so Helm's publisher-side stripping cannot reach announcements sent
 from Home Assistant — this is that same rule on this side of the wire. Keep
-the two range lists identical.
+the range list identical to Helm's and Console's
+(``deckhand-console/backend/services/dial_text.py``); both of their test
+suites pin it against this file.
 
 No dial font has any emoji glyph, so an emoji reaches the screen as a tofu
 box (a 💧 in a Home Assistant announcement, 2026-09-10). But the dial renders
@@ -48,3 +50,85 @@ def strip_emoji_for_dial(text):
         return text
     stripped = _SPACE_AROUND_NEWLINE_RE.sub("\n", stripped)
     return _SPACE_RUN_RE.sub(" ", stripped).strip()
+
+
+# ── Every other service that sends text the dial draws (helm#399) ─────────
+#
+# 1.14.0 stripped emoji from send_announcement only. The same HA-typed text
+# reaches the same dial fonts through a dozen other services (countdown,
+# overlay subtitles and home messages, invitations, generic face mounts,
+# now-playing, sensor values, menu items, alarm and dial labels) and drew a
+# tofu box on every one. The key lists below mirror Console's
+# ``services/dial_text.py`` (the third publisher, helm#399), so a face mount
+# means the same thing wherever it is published from.
+#
+# Deliberately lists of DISPLAY keys, not "every string": ids, entity_ids,
+# colours, slugs, alarm/schedule/credential names (looked up by name later)
+# and action payloads must reach Helm and the dial byte-exact.
+
+# The invitation prompt (cmd/face/invitation/mount, and the quiet-invitation
+# request Helm turns into a menu item). ``from_name`` is Helm's sender line.
+INVITATION_TEXT_KEYS: tuple[str, ...] = (
+    "text",
+    "subtitle",
+    "accept_label",
+    "decline_label",
+    "hold_text",
+    "accepted_text",
+    "from_name",
+)
+
+# Any cmd/face/<kind>/mount, from each face's firmware parser: message
+# ``text``, clock/sensor ``subtitle_text``, climate ``title``, charge
+# ``label`` and its free-text ``range`` / ``eta``, sensor quad/marquee
+# ``label``, perimeter ``friendly_name``, plus the invitation prompt.
+FACE_MOUNT_TEXT_KEYS: tuple[str, ...] = (
+    "label",
+    "title",
+    "subtitle_text",
+    "home_message",
+    "friendly_name",
+    "range",
+    "eta",
+) + INVITATION_TEXT_KEYS
+
+# Containers that are never walked into. Each holds strings that go BACK out
+# as identifiers or actions: media ``sources`` and art ``scenes`` are selected
+# in HA by label, ``hvac_modes`` go back as set_hvac_mode, ``on_accept`` is
+# the opaque action the dial echoes on accept, ``control`` / ``action_data``
+# are action config.
+_NEVER_WALK: frozenset[str] = frozenset({
+    "scenes",
+    "sources",
+    "hvac_modes",
+    "on_accept",
+    "control",
+    "action_data",
+})
+
+
+def _strip_keys(node, keys: frozenset[str]):
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key in _NEVER_WALK:
+                out[key] = value
+            elif isinstance(value, str):
+                out[key] = strip_emoji_for_dial(value) if key in keys else value
+            else:
+                out[key] = _strip_keys(value, keys)
+        return out
+    if isinstance(node, list):
+        return [_strip_keys(v, keys) for v in node]
+    return node
+
+
+def strip_emoji_keys(payload, keys) -> dict:
+    """Return a copy of ``payload`` with emoji removed from every string
+    under one of ``keys``, at any depth (sensor quads, perimeter bindings).
+    Identifier containers (_NEVER_WALK) are left untouched, and the caller's
+    dict is never mutated — HA hands services their own call data, and a
+    payload is often reused across a whole room fan-out."""
+    if not isinstance(payload, dict):
+        return payload
+    return _strip_keys(payload, frozenset(keys))
