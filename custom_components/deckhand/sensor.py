@@ -156,19 +156,3 @@ class DeckhandSensor(DeckhandEntity, SensorEntity):
         if value is None:
             return None
         return value
-
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to status updates when added to hass."""
-        await super().async_added_to_hass()
-
-        @callback
-        def _handle_update(event) -> None:
-            """Handle a status update event."""
-            if event.data.get("dial_id") != self._dial_id:
-                return
-            self.update_from_status(event.data["data"])
-            self.async_write_ha_state()
-
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
-        )

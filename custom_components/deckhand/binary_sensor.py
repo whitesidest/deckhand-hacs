@@ -88,22 +88,6 @@ class DeckhandConnectivitySensor(DeckhandEntity, BinarySensorEntity):
         """Connectivity sensor is always available so it can report offline."""
         return True
 
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to status updates when added to hass."""
-        await super().async_added_to_hass()
-
-        @callback
-        def _handle_update(event) -> None:
-            """Handle a status update event."""
-            if event.data.get("dial_id") != self._dial_id:
-                return
-            self.update_from_status(event.data["data"])
-            self.async_write_ha_state()
-
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
-        )
-
 
 class DeckhandDndSensor(DeckhandEntity, BinarySensorEntity):
     """Binary sensor for the dial's quiet-mode Do Not Disturb (helm#179).
@@ -152,19 +136,3 @@ class DeckhandDndSensor(DeckhandEntity, BinarySensorEntity):
         if "dnd" not in self._dial_data:
             return False
         return super().available
-
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to status updates when added to hass."""
-        await super().async_added_to_hass()
-
-        @callback
-        def _handle_update(event) -> None:
-            """Handle a status update event."""
-            if event.data.get("dial_id") != self._dial_id:
-                return
-            self.update_from_status(event.data["data"])
-            self.async_write_ha_state()
-
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
-        )

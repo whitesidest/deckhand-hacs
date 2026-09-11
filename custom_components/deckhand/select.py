@@ -125,8 +125,21 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         self.async_write_ha_state()
         _LOGGER.info("Set theme '%s' on %s", option, self._dial_id)
 
+    def _on_status(self, data: dict[str, Any]) -> None:
+        """Follow the dial's applied theme (the base class does the listening)."""
+        theme = data.get("current_theme")
+        if theme and theme in self._attr_options:
+            self._attr_current_option = theme
+        elif theme:
+            # Theme not in catalog — surface it anyway so the
+            # current value renders (HA hides selects whose value
+            # isn't in options).
+            self._attr_options = self._attr_options + [theme]
+            self._attr_current_option = theme
+        super()._on_status(data)
+
     async def async_added_to_hass(self) -> None:
-        """Subscribe to status + themes-catalog updates."""
+        """Subscribe to themes-catalog updates (status: see DeckhandEntity)."""
         await super().async_added_to_hass()
 
         # Now that self.hass is bound, refresh options from whatever the
@@ -138,28 +151,6 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
             cached = cached + [self._attr_current_option]
         self._attr_options = cached
         self.async_write_ha_state()
-
-        @callback
-        def _handle_update(event) -> None:
-            """Handle a status update event."""
-            if event.data.get("dial_id") != self._dial_id:
-                return
-            data = event.data["data"]
-            theme = data.get("current_theme")
-            if theme and theme in self._attr_options:
-                self._attr_current_option = theme
-            elif theme:
-                # Theme not in catalog — surface it anyway so the
-                # current value renders (HA hides selects whose value
-                # isn't in options).
-                self._attr_options = self._attr_options + [theme]
-                self._attr_current_option = theme
-            self.update_from_status(data)
-            self.async_write_ha_state()
-
-        self.async_on_remove(
-            self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
-        )
 
         @callback
         def _handle_themes_updated() -> None:

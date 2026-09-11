@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
 from .const import DOMAIN, HEARTBEAT_TIMEOUT, MANUFACTURER, HARDWARE_MODELS
@@ -44,6 +45,33 @@ class DeckhandEntity(Entity):
         except (TypeError, ValueError):
             return False
         return datetime.now() - ts < timedelta(seconds=HEARTBEAT_TIMEOUT)
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the dial's heartbeats, for every entity.
+
+        The status handler in __init__.py REPLACES store["dials"][dial_id]
+        with a new dict on each heartbeat, so an entity that doesn't listen
+        keeps the snapshot it was created with. The Reboot button and the
+        Brightness slider didn't listen: they read "available" forever after
+        startup (even for an offline dial), and "unavailable" forever after
+        HA re-added them for any reason, such as an entity_id rename.
+        """
+        await super().async_added_to_hass()
+
+        @callback
+        def _handle_update(event) -> None:
+            if event.data.get("dial_id") != self._dial_id:
+                return
+            self._on_status(event.data["data"])
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            self.hass.bus.async_listen(f"{DOMAIN}_status_update", _handle_update)
+        )
+
+    def _on_status(self, data: dict[str, Any]) -> None:
+        """Apply one heartbeat. Override to read more than the base fields."""
+        self.update_from_status(data)
 
     def update_from_status(self, data: dict[str, Any]) -> None:
         """Update entity state from a heartbeat payload."""
