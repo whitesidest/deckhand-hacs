@@ -583,6 +583,10 @@ class QuietInvitationTests(unittest.TestCase):
 
         ns: dict = {
             "strip_emoji_for_dial": _dial_text.strip_emoji_for_dial,
+            # helm#399 — the invitation handler strips its prompt keys too.
+            "strip_emoji_keys": _dial_text.strip_emoji_keys,
+            "INVITATION_TEXT_KEYS": _dial_text.INVITATION_TEXT_KEYS,
+            "FACE_MOUNT_TEXT_KEYS": _dial_text.FACE_MOUNT_TEXT_KEYS,
             "Any": Any,
             "json": _json,
             "mqtt": _Mqtt,

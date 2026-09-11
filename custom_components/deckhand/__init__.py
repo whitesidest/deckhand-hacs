@@ -26,7 +26,12 @@ except ImportError:  # pragma: no cover - defensive fallback
     class NoURLAvailableError(Exception):  # type: ignore[no-redef]
         """Fallback when helpers.network is unavailable."""
 
-from .dial_text import strip_emoji_for_dial
+from .dial_text import (
+    FACE_MOUNT_TEXT_KEYS,
+    INVITATION_TEXT_KEYS,
+    strip_emoji_for_dial,
+    strip_emoji_keys,
+)
 from .const import (
     CONF_MEDIA_PLAYER_BINDINGS,
     CONF_TEAM_ID,
@@ -153,6 +158,12 @@ _OVERLAY_STRING_FIELDS = (
     "sensor_label",
     "framecast_frame_id",
 )
+# The dial-drawn text on each non-announcement topic HACS publishes
+# (helm#399; mirrors Console's services/dial_text.py). Only these keys are
+# emoji-stripped: entity ids, frame ids and modes are left byte-exact.
+_OVERLAY_TEXT_KEYS = ("subtitle_text", "home_message", "sensor_label", "label")
+_NOW_PLAYING_TEXT_KEYS = ("title", "artist", "album")
+_SENSOR_VALUE_TEXT_KEYS = ("label", "value")
 _OVERLAY_SUBTITLE_MODES = {
     "theme", "custom", "date", "date_year", "ical_next_event", "none",
 }
@@ -853,6 +864,9 @@ async def _publish_now_playing(
 ) -> None:
     """Publish a now-playing payload to a dial over MQTT."""
     topic = TOPIC_CMD_NOW_PLAYING.format(team_id=team_id, dial_id=dial_id)
+    # Emoji in track/artist names draw tofu (helm#399). Only the display
+    # keys: ``sources`` is selected BY name and must stay exact.
+    payload = strip_emoji_keys(payload, _NOW_PLAYING_TEXT_KEYS)
     await mqtt.async_publish(hass, topic, json.dumps(payload))
 
 
@@ -883,7 +897,8 @@ def _build_sensor_value_payload(
         "value": value[:48],
         "unit": unit[:8],
     }
-    return payload
+    # helm#399: a friendly_name like "Pool 🏊" drew a tofu box.
+    return strip_emoji_keys(payload, _SENSOR_VALUE_TEXT_KEYS)
 
 
 async def _push_sensor_value_for_entity(
@@ -1318,12 +1333,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         await _require_admin(call)
         device_id = call.data.get("device_id")
         target_dt = call.data.get("target_datetime")
-        message = call.data.get("message", "Almost there...")
-        celebration_message = call.data.get("celebration_message")
+        # Same cmd/announce topic and same fonts as send_announcement, so the
+        # same emoji strip (helm#399 — 1.14.0 only covered the plain
+        # announcement). Stripped before the empty check so an emoji-only
+        # celebration is refused rather than sent blank.
+        message = strip_emoji_for_dial(call.data.get("message", "Almost there..."))
+        celebration_message = strip_emoji_for_dial(call.data.get("celebration_message"))
         celebration_animation = call.data.get("celebration_animation", "fireworks")
         celebration_theme = call.data.get("celebration_theme", "")
         lead_seconds = int(call.data.get("lead_seconds", 60) or 60)
-        from_name = call.data.get("from_name", "Home Assistant")
+        from_name = strip_emoji_for_dial(call.data.get("from_name", "Home Assistant"))
 
         if not isinstance(celebration_message, str) or not celebration_message.strip():
             _LOGGER.warning("send_countdown called with empty celebration_message")
@@ -1413,7 +1432,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         subtitle_mode = call.data.get("subtitle_mode")
         subtitle_text = call.data.get("subtitle_text")
-        has_text = isinstance(subtitle_text, str) and bool(subtitle_text.strip())
+        # Judged on what will reach the dial: an emoji-only subtitle is
+        # stripped to nothing below (helm#399), so it must not flip the
+        # mode to "custom" and blank the subtitle line.
+        has_text = isinstance(subtitle_text, str) and bool(
+            strip_emoji_for_dial(subtitle_text).strip()
+        )
         if subtitle_mode is not None:
             if subtitle_mode not in _OVERLAY_SUBTITLE_MODES:
                 raise ServiceValidationError(
@@ -1549,6 +1573,14 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 "apply_overlay requires at least one field to be set"
             )
 
+        # Emoji have no dial glyph (helm#399): strip the subtitle, the
+        # message-face text and every sensor label — including the quad /
+        # marquee copies the sensor-value pushes below reuse.
+        payload = strip_emoji_keys(payload, _OVERLAY_TEXT_KEYS)
+        sensors_out = payload.get("sensors") or {}
+        quad_entries = sensors_out.get("quad", quad_entries)
+        marquee_entries = sensors_out.get("marquee", marquee_entries)
+
         # Pre-populate the dial's sensor LUT BEFORE the face swap so the
         # first render of the new face shows real numbers. If cmd/overlay
         # arrives first, the firmware runs build_clock() while the LUT
@@ -1626,6 +1658,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if art:
             payload["album_art_url"] = str(art)[:256]
 
+        payload = strip_emoji_keys(payload, _NOW_PLAYING_TEXT_KEYS)  # helm#399
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_NOW_PLAYING.format(team_id=team_id, dial_id=dial_id)
@@ -1728,6 +1761,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if color:
             payload["color"] = str(color)[:7]
 
+        payload = strip_emoji_keys(payload, _SENSOR_VALUE_TEXT_KEYS)  # helm#399
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_SENSOR_VALUE.format(team_id=team_id, dial_id=dial_id)
@@ -1913,7 +1947,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             payload["timezone"] = iana
 
         if call.data.get("label") is not None:
-            label = str(call.data["label"]).strip()
+            # The dial draws its label on the home screen (helm#399).
+            label = strip_emoji_for_dial(str(call.data["label"]).strip())
             if len(label) > 64:
                 raise ServiceValidationError(
                     f"label must be at most 64 characters (got {len(label)})."
@@ -2113,6 +2148,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
     async def _publish_face_mount(
         face_id: str, payload: dict[str, Any], targets: list, retained: bool = True
     ) -> None:
+        # Every face's display text (message text, climate title, charge
+        # label/range/eta, sensor labels, perimeter friendly names) loses its
+        # emoji here, the one place both mount services publish from
+        # (helm#399). Identifiers and action config are never touched.
+        payload = strip_emoji_keys(payload, FACE_MOUNT_TEXT_KEYS)
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_FACE_MOUNT.format(
@@ -2370,7 +2410,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         await _require_admin(call)
         device_id = call.data.get("device_id")
         key = (call.data.get("key") or "").strip()
-        label = (call.data.get("label") or "").strip()
+        # Helm stores this label on a real MenuItem and pushes it in cmd/menu;
+        # an emoji in it drew a tofu box on the dial (helm#399). Stripped
+        # before the required check, so an emoji-only label is refused
+        # rather than creating a blank row.
+        label = strip_emoji_for_dial((call.data.get("label") or "").strip())
         if not key or not label:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
@@ -2476,6 +2520,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         for k in ("one_time_date", "label", "sunrise_color"):
             if call.data.get(k):
                 payload[k] = str(call.data[k])
+        # The ring screen draws the label (helm#399). ``name`` is the handle
+        # enable/disable look it up by, so it is never rewritten.
+        if "label" in payload:
+            payload["label"] = strip_emoji_for_dial(payload["label"])
         for k in ("snooze_minutes", "sunrise_duration_s"):
             if call.data.get(k) is not None:
                 payload[k] = int(call.data[k])
@@ -2618,6 +2666,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                   "announcement_animation", "target_scope"):
             if call.data.get(k):
                 payload[k] = str(call.data[k]).strip()
+        # The announcement it fires is drawn on the dial (helm#399). The
+        # schedule ``name`` is its lookup handle and is left exact.
+        for k in ("announcement_message", "announcement_from"):
+            if k in payload:
+                payload[k] = strip_emoji_for_dial(payload[k])
         if isinstance(call.data.get("days"), list):
             payload["days"] = call.data["days"]
         for k in ("minute_offset", "interval_hours", "hour_start", "hour_end",
@@ -2720,7 +2773,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_key="unknown_device",
             )
 
-        text = (call.data.get("text") or "").strip()
+        # Stripped before the required check (helm#399): an emoji-only
+        # prompt is refused rather than mounted blank.
+        text = strip_emoji_for_dial((call.data.get("text") or "").strip())
         if not text:
             raise ServiceValidationError("text is required")
 
@@ -2794,6 +2849,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             if transition != DEFAULT_TRANSITION:
                 request["transition"] = transition
 
+            # Helm bakes this into the prompt AND the menu item label.
+            request = strip_emoji_keys(request, INVITATION_TEXT_KEYS)
             sent_ids = []
             for dial_id, team_id in targets:
                 invitation_id = explicit_id or secrets.token_urlsafe(12)
@@ -2857,6 +2914,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         if transition != DEFAULT_TRANSITION:
             payload["transition"] = transition
+
+        # Subtitle, button labels and sender line (helm#399). on_accept is
+        # opaque action data the dial echoes back — never walked.
+        payload = strip_emoji_keys(payload, INVITATION_TEXT_KEYS)
 
         sent_ids: list[str] = []
         for dial_id, team_id in targets:
