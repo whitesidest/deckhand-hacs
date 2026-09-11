@@ -74,6 +74,12 @@
     },
     "invalid_payload": {
       "message": "Payload must be a dictionary."
+    },
+    "art_entity_not_media_player": {
+      "message": "{entity_id} is not a media player. An Art Gallery (ha_art) menu item selects one of a media player's sources, so set action_data.entity_id to a media_player entity. Nothing was sent to the dial."
+    },
+    "menu_item_entity_wrong_domain": {
+      "message": "{entity_id} cannot be the entity of a {item_type} menu item. Set action_data.entity_id to a {domains} entity. Nothing was sent to the dial."
     }
   },
   "services": {

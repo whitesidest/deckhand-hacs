@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.14.3"  # 1.14.3 = update_perimeter_state can drive the perimeter_ring overlay (helm#415); source names sent byte-exact (helm#410)
+    EXPECTED_VERSION = "1.14.4"  # 1.14.4 = add_menu_item refuses an Art Gallery item whose entity is not a media_player, as Helm does (helm#459)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

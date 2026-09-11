@@ -1240,7 +1240,9 @@ add_menu_item:
       name: Action Data (advanced)
       description: >
         Optional dict merged into the item's action_data (entity ids
-        etc. for directly-bound item types).
+        etc. for directly-bound item types). An ha_art (Art Gallery)
+        item's entity_id must be a media_player; any other entity is
+        refused with an error.
       selector:
         object:
 

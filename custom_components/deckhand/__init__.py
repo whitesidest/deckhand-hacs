@@ -32,6 +32,7 @@ from .dial_text import (
     strip_emoji_for_dial,
     strip_emoji_keys,
 )
+from .menu_item_types import disallowed_entity_domains
 from .const import (
     CONF_MEDIA_PLAYER_BINDINGS,
     CONF_TEAM_ID,
@@ -2472,6 +2473,28 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             value = call.data.get(field)
             if value is not None:
                 payload.setdefault("action_data", {})[ad_key] = int(value)
+        # The entity must be one the item's type can act on: an Art Gallery
+        # item's is a media_player (helm#459). Helm refuses anything else, but
+        # menu_request has no reply, so its refusal is a line in Helm's log and
+        # the service would look like it worked. Checked on exactly what goes
+        # on the wire, with Helm's default type when none is given.
+        entity_id = payload.get("action_data", {}).get("entity_id")
+        item_type = payload.get("item_type") or "ha_service"
+        domains = disallowed_entity_domains(item_type, entity_id)
+        if domains:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key=(
+                    "art_entity_not_media_player"
+                    if item_type == "ha_art"
+                    else "menu_item_entity_wrong_domain"
+                ),
+                translation_placeholders={
+                    "entity_id": str(entity_id).strip(),
+                    "item_type": item_type,
+                    "domains": ", ".join(domains),
+                },
+            )
         body = json.dumps(payload)
         for dial_id, team_id in targets:
             topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
