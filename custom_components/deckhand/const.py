@@ -124,6 +124,15 @@ PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
 # face_perimeter_pulse.h) — extras are silently dropped on-dial, so the
 # integration truncates with a warning instead.
 PERIMETER_MAX_BINDINGS = 16
+# update_perimeter_state's ``layer`` field → the face id its state topic
+# names (helm#415). A dial draws a perimeter ring two ways: the
+# ``perimeter_pulse`` HERO face, or the ``perimeter_ring`` OVERLAY that rides
+# on a sensor / clock / charge face. Firmware ``face_dispatch_state`` sends
+# ``cmd/face/perimeter_ring/state`` to the overlay slot and every other state
+# topic to the hero, so the topic has to name the layer. HACS keeps no record
+# of which one a dial shows (Helm does), so the caller says.
+PERIMETER_STATE_LAYERS = {"pulse": "perimeter_pulse", "ring": "perimeter_ring"}
+PERIMETER_STATE_DEFAULT_LAYER = "pulse"
 
 # ── Doorbell / snapshot image push (cmd/image) ──────────────────────
 # Default dial resolution for image backdrops pushed from HACS. HACS

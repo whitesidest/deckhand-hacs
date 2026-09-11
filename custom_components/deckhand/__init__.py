@@ -41,6 +41,8 @@ from .const import (
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
     PERIMETER_MAX_BINDINGS,
+    PERIMETER_STATE_DEFAULT_LAYER,
+    PERIMETER_STATE_LAYERS,
     PERIMETER_TREATMENTS,
     PLATFORMS,
     TOPIC_CMD_ANNOUNCE,
@@ -2263,8 +2265,24 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         ``value`` (0-1) drives the gradient treatment, ``event: true``
         fires a ripple/flash pulse. Helm-published faces don't need
         this — Helm's feeder pushes the same topic itself.
+
+        ``layer`` picks the ring the update is for (helm#415): ``pulse``
+        (default, the only target before 1.14.3) is the Perimeter Pulse
+        hero face; ``ring`` is the ``perimeter_ring`` overlay authored on
+        a sensor / clock / charge face. Same payload either way — the
+        overlay's pr_on_state reads the same keys. Deliberately not
+        "both": firmware routes a state topic that doesn't name the
+        mounted overlay to the HERO, so a second copy would land on the
+        pulse face twice rather than being ignored.
         """
         await _require_admin(call)
+        layer = call.data.get("layer") or PERIMETER_STATE_DEFAULT_LAYER
+        face_id = PERIMETER_STATE_LAYERS.get(layer) if isinstance(layer, str) else None
+        if face_id is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_layer",
+            )
         device_id = call.data.get("device_id")
         targets = _resolve_targets(hass, device_id)
         if not targets:
@@ -2314,12 +2332,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         body = json.dumps({"bindings": clean_states})
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_FACE_STATE.format(
-                team_id=team_id, dial_id=dial_id, face_id="perimeter_pulse",
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
             )
             await mqtt.async_publish(hass, topic, body, retain=False)
         _LOGGER.info(
-            "update_perimeter_state: %d update(s) → %d dial(s)",
-            len(clean_states), len(targets),
+            "update_perimeter_state: %d update(s) → %d dial(s) (%s)",
+            len(clean_states), len(targets), face_id,
         )
 
     async def _mount_face(call) -> None:
