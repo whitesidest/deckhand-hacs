@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import re
 
-from ._units import safe_text_for_dial
-
 # AmpliPi and other whole-home amps append a lowercase provider tag to
 # media_title ("Pandora <Station> - pandora") instead of exposing a clean
 # song + app_name. This matches that trailing " - <provider>" tag; the
@@ -58,7 +56,16 @@ _PLAY_PAUSE_BITS = _FEAT_PLAY | _FEAT_PAUSE
 # the cached menu item. Twelve is more than any real amp exposes as useful
 # inputs; beyond that the picker stops being a calm affordance anyway.
 _MAX_SOURCES = 12
-_MAX_SOURCE_LEN = 24
+
+# A source name is an identifier, not display text (helm#410). The dial copies
+# each one into a fixed 32-byte buffer (firmware ``face_media_sources[].label``
+# and ``.id`` in ui.h) and its picker publishes that copy back as the source to
+# select — which Helm or Console hands to ``media_player.select_source``, an
+# exact match. So 31 bytes of UTF-8 (not characters: "テレビ" is 9) is the
+# longest name that survives the round trip. A longer one would be cut by the
+# firmware, possibly mid-character, and could never be selected.
+# Must match MAX_SOURCE_BYTES in Helm and Console.
+_MAX_SOURCE_BYTES = 31
 
 
 def now_playing_capabilities(attr: dict) -> dict:
@@ -85,28 +92,38 @@ def now_playing_capabilities(attr: dict) -> dict:
 
 
 def now_playing_sources(attr: dict) -> list[str]:
-    """Selectable inputs for the source picker, ASCII-safe and bounded.
+    """Selectable inputs for the source picker, byte-exact and bounded.
 
     Separate from the capability flags because ``SELECT_SOURCE`` being set
     is not sufficient: an entity can advertise the verb and expose an empty
     ``source_list``, and a picker with nothing in it is exactly the dead
     affordance this module exists to prevent.
 
-    Names are ASCII-folded at the publisher because the dial fonts cannot
-    render anything else — an amp with a source called "Küche" would
-    otherwise reach the glass as tofu. Folding (not dropping) matters here:
-    ``safe_unit_for_dial`` would turn it into "Kche", which reads as a typo.
+    Each name goes out exactly as Home Assistant spelled it (helm#410). The
+    dial sends the name it was given back as the source to select, and
+    ``select_source`` is an exact match, so any rewrite breaks the pick. This
+    list used to be ASCII-folded, which turned "Télé" into an unselectable
+    "Tele" and folded "Радио" / "テレビ" to nothing, dropping them. The dial's
+    fonts draw Latin-1, Latin Extended-A, Cyrillic and kana, so there is
+    nothing to fold. Not even emoji are stripped: an emoji draws as a tofu
+    box, which is cosmetic, but a stripped name selects nothing
+    (``_publish_now_playing`` leaves ``sources`` out of its emoji strip for
+    the same reason).
+
+    A name too long for the dial's buffer (``_MAX_SOURCE_BYTES``) is left
+    out rather than shortened: shortened, it would be a picker row that does
+    nothing when chosen.
     """
     raw = attr.get("source_list")
     if not isinstance(raw, list):
         return []
     out: list[str] = []
     for entry in raw:
-        if not isinstance(entry, str):
+        if not isinstance(entry, str) or not entry.strip():
             continue
-        name = safe_text_for_dial(entry).strip()[:_MAX_SOURCE_LEN]
-        if name:
-            out.append(name)
+        if len(entry.encode("utf-8")) > _MAX_SOURCE_BYTES:
+            continue
+        out.append(entry)
         if len(out) >= _MAX_SOURCES:
             break
     return out

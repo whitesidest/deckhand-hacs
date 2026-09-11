@@ -242,19 +242,32 @@ class SourcePickerTests(unittest.TestCase):
         self.assertNotIn("can_select_source", out)
         self.assertNotIn("sources", out)
 
-    def test_source_names_are_folded_not_dropped(self):
-        # "Küche" must not arrive as "Kche" — that reads as a typo and gets
-        # filed against the wrong component.
-        out = now_playing_controls(
-            {"supported_features": SELECT_SOURCE, "source_list": ["Küche", "Café", "Ærø"]}
-        )
-        self.assertEqual(out["sources"], ["Kuche", "Cafe", "AEro"])
+    def test_source_names_reach_the_dial_byte_exact(self):
+        """helm#410. The dial sends each name back as the source to select
+        and HA's select_source is an exact match, so any rewrite breaks the
+        pick. These were ASCII-folded: "Télé" became an unselectable "Tele",
+        and the Cyrillic and Japanese names folded to nothing and vanished."""
+        names = ["Télé", "Café Lounge", "Küche", "Ærø", "Радио", "テレビ", "🎧 Spotify"]
+        out = now_playing_controls({"supported_features": SELECT_SOURCE, "source_list": names})
+        self.assertEqual(out["sources"], names)
+        self.assertEqual(out["source_count"], len(names))
 
-    def test_unrenderable_names_fall_out_and_can_take_the_picker_with_them(self):
+    def test_non_latin_names_keep_the_picker(self):
         out = now_playing_controls(
-            {"supported_features": SELECT_SOURCE, "source_list": ["日本語", "中文"]}
+            {"supported_features": SELECT_SOURCE, "source_list": ["Радио", "テレビ"]}
         )
-        self.assertNotIn("can_select_source", out)
+        self.assertIs(out["can_select_source"], True)
+        self.assertEqual(out["sources"], ["Радио", "テレビ"])
+
+    def test_a_name_the_dial_cannot_hold_is_left_out_not_cut(self):
+        """The firmware keeps each source in a 32-byte buffer and sends that
+        copy back. A longer name would come back cut (possibly mid-character)
+        and select nothing, so it never becomes a picker row. The limit is
+        bytes, not characters: kana are three bytes each."""
+        fits = "x" * 31
+        kana_fits = "テ" * 10  # 30 bytes
+        out = now_playing_sources({"source_list": [fits, "x" * 32, kana_fits, "テ" * 11]})
+        self.assertEqual(out, [fits, kana_fits])
 
     def test_list_is_bounded(self):
         many = [f"Input {i}" for i in range(40)]
@@ -262,7 +275,7 @@ class SourcePickerTests(unittest.TestCase):
         self.assertEqual(len(out["sources"]), 12)
 
     def test_junk_entries_are_skipped(self):
-        out = now_playing_sources({"source_list": ["Aux", None, 7, "", "Phono"]})
+        out = now_playing_sources({"source_list": ["Aux", None, 7, "", "  ", "Phono"]})
         self.assertEqual(out, ["Aux", "Phono"])
 
     def test_bad_source_list_shape(self):
