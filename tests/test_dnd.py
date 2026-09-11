@@ -182,7 +182,10 @@ class DndBinarySensorTests(unittest.TestCase):
         self.assertIn('"dnd" not in self._dial_data', self.block)
 
     def test_listens_for_status_updates(self):
-        self.assertIn('_status_update', self.block)
+        # The listener lives once in DeckhandEntity now (every entity needs
+        # it; see test_entities_follow_heartbeats.py, which proves the DND
+        # sensor gets exactly one). Guard that it still inherits it.
+        self.assertIn("class DeckhandDndSensor(DeckhandEntity,", self.block)
 
 
 # ── 4. Blueprint lint (loader shared with the NFC lint style) ───────

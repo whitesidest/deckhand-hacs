@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.14.0"  # 1.14.0 = announcements stay until touched; emoji stripped
+    EXPECTED_VERSION = "1.14.1"  # 1.14.1 = every entity follows heartbeats (Reboot, Brightness)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
