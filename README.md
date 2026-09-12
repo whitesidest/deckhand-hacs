@@ -2,6 +2,17 @@
 
 HACS-compatible custom integration that makes Deckhand smart dials first-class Home Assistant citizens. Dials are auto-discovered via MQTT and appear as full HA devices with sensors, controls, and services.
 
+## Brand icon
+
+`brand/` holds the Deckhand anchor at the sizes Home Assistant's brand
+registry expects (`icon.png` 256 px, `icon@2x.png` 512 px, `logo` the same,
+transparent background). HACS and the Integrations page do not read icons
+from this repository — they fetch `brands.home-assistant.io/deckhand/…`,
+which only exists once these files are merged into
+[home-assistant/brands](https://github.com/home-assistant/brands) under
+`custom_integrations/deckhand/`. Until then the integration shows the
+generic placeholder.
+
 ## Requirements
 
 - Home Assistant 2024.1.0+
