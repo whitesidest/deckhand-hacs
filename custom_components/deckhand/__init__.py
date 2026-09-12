@@ -2377,10 +2377,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _unmount_face(call) -> None:
-        """Dismiss the active face and restore the theme's clock.
+        """Dismiss the face ``face_id`` names and restore the theme's clock.
 
         Completes the reactive-face lifecycle (mount on event, dismiss
         when done — e.g. the Charge face when the EV session ends).
+        ``face_id`` has to be the face that is up: since firmware 0.4.123
+        an unmount touches only the face it names (helm#427), so naming
+        another one is a no-op the dial acks as no_face_active. It used to
+        take down whatever was on the glass, and automations that named
+        the wrong face cleared the hero by accident.
         Publishes ``cmd/face/<id>/unmount`` AND clears the retained
         mount message: without the clear, the next broker (re)connect
         would replay the stale retained mount and resurrect the face
