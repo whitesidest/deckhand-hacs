@@ -125,6 +125,46 @@ automation:
           entity_id: light.living_room
 ```
 
+## Timers in automations
+
+Every dial gets a **Timer** event entity (`event.<dial>_timer`) with two
+event types: `started` when a guest starts the dial's timer and `completed`
+when it reaches zero. Pick it in the automation editor like any event
+entity, or in YAML:
+
+```yaml
+automation:
+  - alias: "Kitchen timer done — hood off, lights up"
+    trigger:
+      - platform: state
+        entity_id: event.kitchen_control_timer
+        attribute: event_type
+        to: "completed"
+    action:
+      - service: fan.turn_off
+        target:
+          entity_id: fan.range_hood
+      - service: light.turn_on
+        target:
+          entity_id: light.kitchen
+        data:
+          brightness_pct: 100
+```
+
+The entity's attributes carry `label` (the timer's menu label) and
+`minutes` (what it was set to — firmware 0.4.125 and later). Condition on
+them to react differently to a 3-minute egg and a 45-minute roast:
+
+```yaml
+    condition:
+      - condition: template
+        value_template: "{{ state_attr('event.kitchen_control_timer', 'minutes') | int(0) >= 30 }}"
+```
+
+The same moments are also on the bus as `deckhand_dial_event` with
+`type: timer_start` / `type: timer_complete` (payload `item_label`,
+`minutes`), for automations that already listen there.
+
 ## Waking a cold speaker from the Audio face
 
 Opening the Audio face while nothing is playing used to hand the operator

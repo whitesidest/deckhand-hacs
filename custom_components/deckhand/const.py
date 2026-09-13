@@ -198,4 +198,5 @@ PLATFORMS = [
     "select",
     "button",
     "number",
+    "event",
 ]
