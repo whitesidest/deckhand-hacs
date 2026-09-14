@@ -73,6 +73,30 @@ class DeckhandTimerEvent(DeckhandEntity, EventEntity):
         super().__init__(dial_id, data)
         self._attr_unique_id = f"{dial_id}_timer"
 
+    async def async_get_last_state(self):
+        """Never restore a past event across a restart.
+
+        EventEntity restores its last event on startup, which writes the old
+        timestamp as a fresh state change (``unavailable`` → yesterday's
+        ``completed``). A state trigger on the entity fired on exactly that
+        at 03:51 one morning and chimed for a timer that had finished twelve
+        hours earlier. A timer that ended before the restart is not news:
+        start ``unknown`` and let the next real timer be the first event.
+        """
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Always available.
+
+        The base class follows the dial's heartbeat, and every lapse-and-
+        return would replay the last timestamp as ``unavailable`` → state —
+        another false ``completed`` for any state trigger. Reachability is
+        the connectivity binary_sensor's job; the last event stays true
+        whether or not the dial is online right now.
+        """
+        return True
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(

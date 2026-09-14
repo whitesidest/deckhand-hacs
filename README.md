@@ -138,8 +138,12 @@ automation:
     trigger:
       - platform: state
         entity_id: event.kitchen_control_timer
+        not_from: ["unknown", "unavailable"]
+    condition:
+      - condition: state
+        entity_id: event.kitchen_control_timer
         attribute: event_type
-        to: "completed"
+        state: "completed"
     action:
       - service: fan.turn_off
         target:
@@ -151,9 +155,17 @@ automation:
           brightness_pct: 100
 ```
 
-The entity's attributes carry `label` (the timer's menu label) and
-`minutes` (what it was set to — firmware 0.4.125 and later). Condition on
-them to react differently to a 3-minute egg and a 45-minute roast:
+The entity's state is the time of the last event and changes only when a
+timer actually starts or completes: it does not restore a past event after
+a Home Assistant restart and it stays available while the dial is offline,
+so a state trigger like the one above never fires for a timer that ended
+before the restart. (The `not_from` guard is belt and braces for the first
+event after startup.) Trigger on the state, not on the `event_type`
+attribute — check the attribute in a condition, as above.
+
+The attributes also carry `label` (the timer's menu label) and `minutes`
+(what it was set to — firmware 0.4.125 and later). Condition on them to
+react differently to a 3-minute egg and a 45-minute roast:
 
 ```yaml
     condition:

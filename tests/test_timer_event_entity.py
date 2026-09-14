@@ -61,6 +61,28 @@ class TimerEventEntityTests(unittest.TestCase):
         self.assertIn('payload.get("item_label")', src)
         self.assertIn('payload.get("minutes")', src)
 
+    def test_no_event_is_restored_across_a_restart(self):
+        # 2026-09-14 03:51: HA restarted, the entity restored yesterday's
+        # "completed" as a fresh state change, and a state trigger chimed
+        # for a timer twelve hours gone. The override must return None.
+        src = EVENT_PY.read_text(encoding="utf-8")
+        body = re.search(r"async def async_get_last_state\(self\):(.*?)\n    (?:@|async def|def)", src, re.DOTALL)
+        self.assertIsNotNone(body, "async_get_last_state override missing")
+        self.assertIn("return None", body.group(1))
+
+    def test_entity_does_not_flap_availability(self):
+        # Every heartbeat lapse-and-return would otherwise replay the last
+        # timestamp as unavailable → state, another false trigger.
+        src = EVENT_PY.read_text(encoding="utf-8")
+        body = re.search(r"def available\(self\) -> bool:(.*?)\n    (?:@|async def|def)", src, re.DOTALL)
+        self.assertIsNotNone(body, "available override missing")
+        self.assertIn("return True", body.group(1))
+
+    def test_readme_trigger_guards_the_first_event_after_startup(self):
+        text = README.read_text(encoding="utf-8")
+        self.assertIn('not_from: ["unknown", "unavailable"]', text)
+        self.assertNotIn('attribute: event_type\n        to: "completed"', text)
+
     def test_readme_documents_the_entity_and_both_types(self):
         text = README.read_text(encoding="utf-8")
         self.assertIn("## Timers in automations", text)
