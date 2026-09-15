@@ -561,6 +561,9 @@ class QuietInvitationTests(unittest.TestCase):
         async def _noop_admin(call):
             return None
 
+        async def _automation_requester(call):
+            return "automation"
+
         # send_announcement's optional image backdrop. Returning None
         # keeps these runs on the text-only path — the image plumbing
         # has its own coverage in test_image_push.py.
@@ -595,6 +598,12 @@ class QuietInvitationTests(unittest.TestCase):
             "ServiceValidationError": _SVE,
             "_LOGGER": logging.getLogger("test"),
             "_require_admin": _noop_admin,
+            # helm#521 — push_theme names the requester for Helm's audit
+            # row; no user on a harness call, so it reads as an automation.
+            "_requested_by": _automation_requester,
+            "SERVER_RESOLVED_THEMES": ("random",),
+            "TOPIC_THEME_REQUEST": "deckhand/{team_id}/dial/{dial_id}/theme_request",
+            "TOPIC_CMD_THEME": "deckhand/{team_id}/dial/{dial_id}/cmd/theme",
             "_resolve_targets": lambda hass, device_id: list(targets),
             "_resolve_all_dials": lambda hass: list(targets),
             "_fetch_announcement_image": _no_image,

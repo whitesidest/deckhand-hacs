@@ -1151,6 +1151,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
     # the team. Gate them behind HA admin — a guest on the household
     # Lovelace shouldn't be able to reboot the lobby dials or replace
     # an announcement with attacker copy.
+    async def _requested_by(call) -> str:
+        """Who asked, for Helm's audit row (helm#521).
+
+        The HA user's name when a person called the service; "automation"
+        when HA itself did (automations and scripts carry no user_id).
+        """
+        user_id = getattr(getattr(call, "context", None), "user_id", None)
+        if not user_id:
+            return "automation"
+        user = await hass.auth.async_get_user(user_id)
+        return ((user.name if user is not None else "") or user_id)[:64]
+
     async def _require_admin(call) -> None:
         user_id = getattr(getattr(call, "context", None), "user_id", None)
         if not user_id:
@@ -1198,15 +1210,25 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # in the Helm UI (Gallery → push modal).
         theme_options = call.data.get("theme_options")
 
-        # Server-resolved selections ("random") can't be resolved by the
-        # dial — route via theme_request so Helm picks an activated theme
-        # per dial (excluding its current one) and pushes the concrete
-        # cmd/theme itself. theme_options don't apply to a random pick.
-        if theme.strip() in SERVER_RESOLVED_THEMES:
-            body = json.dumps({"slug": theme.strip()})
+        # Route through Helm (theme_request) unless the caller supplied
+        # transient theme_options, which only the direct cmd/theme carries.
+        # Helm resolves the slug (team-wins / system-fallback, "random" per
+        # dial), pushes the concrete cmd/theme with its background image,
+        # and — the reason concrete slugs go this way too since 1.15.2 —
+        # writes the audit row naming who in HA asked (helm#521). A direct
+        # cmd/theme never reaches Helm, so it never appears in the audit log.
+        has_options = isinstance(theme_options, dict) and bool(theme_options)
+        if theme.strip() in SERVER_RESOLVED_THEMES or not has_options:
+            body = json.dumps(
+                {"slug": theme.strip(), "requested_by": await _requested_by(call)}
+            )
             for dial_id, team_id in targets:
                 topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=dial_id)
                 await mqtt.async_publish(hass, topic, body)
+            _LOGGER.info(
+                "Requested theme '%s' via Helm for %d dial(s): %s",
+                theme, len(targets), ", ".join(d for d, _ in targets),
+            )
             return
 
         payload: dict[str, Any] = {"id": theme}
