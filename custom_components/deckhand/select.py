@@ -16,7 +16,6 @@ from .const import (
     DOMAIN,
     FALLBACK_THEMES,
     SERVER_RESOLVED_THEMES,
-    TOPIC_CMD_THEME,
     TOPIC_THEME_REQUEST,
 )
 from .entity import DeckhandEntity
@@ -97,33 +96,31 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         return [t for t in SERVER_RESOLVED_THEMES if t not in base] + base
 
     async def async_select_option(self, option: str) -> None:
-        """Change the selected theme — publishes MQTT command.
+        """Change the selected theme — asks Helm via theme_request.
 
-        Concrete slugs go straight to cmd/theme (firmware resolves them
-        locally). Server-resolved selections — "random" — go to the
-        theme_request topic instead: Helm picks an activated theme
-        (excluding the dial's current one) and pushes the concrete
-        cmd/theme itself. The dial's next status update then snaps this
-        selector to whatever theme was actually picked.
+        Every selection goes through Helm (since 1.15.2): it resolves the
+        slug (team-wins / system-fallback; "random" picks an activated theme
+        other than the dial's current one), pushes the concrete cmd/theme
+        with its background image, and writes the audit row naming this
+        selector as the requester (helm#521). A direct cmd/theme publish
+        never reached Helm, so the change was invisible in the audit log.
+        The dial's next status update snaps this selector to whatever
+        theme actually landed.
         """
         store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         team_id = store.get("team_id", "1")
 
+        topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=self._dial_id)
+        await mqtt.async_publish(
+            self.hass, topic, json.dumps({"slug": option, "requested_by": "theme selector"})
+        )
+        _LOGGER.info("Requested theme '%s' via Helm on %s", option, self._dial_id)
         if option in SERVER_RESOLVED_THEMES:
-            topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=self._dial_id)
-            await mqtt.async_publish(self.hass, topic, json.dumps({"slug": option}))
-            _LOGGER.info("Requested server-resolved theme '%s' on %s", option, self._dial_id)
             # Don't pin the selector to the sentinel — the status update
             # will move it to the resolved theme within a few seconds.
             return
-
-        topic = TOPIC_CMD_THEME.format(team_id=team_id, dial_id=self._dial_id)
-        await mqtt.async_publish(
-            self.hass, topic, json.dumps({"id": option})
-        )
         self._attr_current_option = option
         self.async_write_ha_state()
-        _LOGGER.info("Set theme '%s' on %s", option, self._dial_id)
 
     def _on_status(self, data: dict[str, Any]) -> None:
         """Follow the dial's applied theme (the base class does the listening)."""
