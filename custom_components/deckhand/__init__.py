@@ -63,13 +63,11 @@ from .const import (
     TOPIC_CMD_REBOOT,
     TOPIC_CMD_SENSOR_VALUE,
     TOPIC_CMD_SUNSET,
-    TOPIC_CMD_THEME,
     TOPIC_HACS_PRESENCE,
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
     TOPIC_THEME_REQUEST,
     TRANSITIONS,
-    SERVER_RESOLVED_THEMES,
 )
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
@@ -1203,49 +1201,42 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # Per-theme custom options ("config" in firmware terms — wedding's
         # diamond_count / initials / flower_color, photo themes' overrides,
         # etc.). Optional; only forwarded when the operator supplied non-
-        # empty values. The dial firmware accepts unknown keys silently so
-        # automations can pre-stage options for themes they don't have yet.
-        # NOTE: this path is TRANSIENT — it doesn't update Helm's stored
-        # DialThemeConfig. For persistence across reboots, set the options
+        # empty values. TRANSIENT by founder decision (helm#538): they ride
+        # this one push and are never written to Helm's stored
+        # DialThemeConfig. For persistence across pushes, set the options
         # in the Helm UI (Gallery → push modal).
         theme_options = call.data.get("theme_options")
 
-        # Route through Helm (theme_request) unless the caller supplied
-        # transient theme_options, which only the direct cmd/theme carries.
-        # Helm resolves the slug (team-wins / system-fallback, "random" per
-        # dial), pushes the concrete cmd/theme with its background image,
-        # and — the reason concrete slugs go this way too since 1.15.2 —
-        # writes the audit row naming who in HA asked (helm#521). A direct
-        # cmd/theme never reaches Helm, so it never appears in the audit log.
-        has_options = isinstance(theme_options, dict) and bool(theme_options)
-        if theme.strip() in SERVER_RESOLVED_THEMES or not has_options:
-            body = json.dumps(
-                {"slug": theme.strip(), "requested_by": await _requested_by(call)}
-            )
-            for dial_id, team_id in targets:
-                topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=dial_id)
-                await mqtt.async_publish(hass, topic, body)
-            _LOGGER.info(
-                "Requested theme '%s' via Helm for %d dial(s): %s",
-                theme, len(targets), ", ".join(d for d, _ in targets),
-            )
-            return
-
-        payload: dict[str, Any] = {"id": theme}
+        # Every push goes through Helm (theme_request). Helm resolves the
+        # slug (team-wins / system-fallback, "random" per dial), merges the
+        # transient options over the dial's stored config, publishes the
+        # concrete cmd/theme RETAINED with its background image, and writes
+        # the audit row naming who in HA asked (helm#521).
+        #
+        # Until 1.16.0 a push WITH options bypassed Helm and published
+        # cmd/theme itself, unretained. The broker then held two truths:
+        # the dial wore this push, but the retained slot still carried
+        # Helm's previous theme, and the next reconnect replayed the old
+        # one — a Sunset automation's theme was undone every time a dial
+        # dropped and came back (helm#538). One path, one retained slot.
+        request: dict[str, Any] = {
+            "slug": theme.strip(),
+            "requested_by": await _requested_by(call),
+        }
         if isinstance(theme_options, dict) and theme_options:
-            payload["config"] = {
+            request["config"] = {
                 k: v for k, v in theme_options.items()
                 if isinstance(k, str) and not k.startswith("_")
             }
-        body = json.dumps(payload)
+        body = json.dumps(request)
         for dial_id, team_id in targets:
-            topic = TOPIC_CMD_THEME.format(team_id=team_id, dial_id=dial_id)
+            topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
         _LOGGER.info(
-            "Pushed theme '%s' to %d dial(s): %s%s",
+            "Requested theme '%s' via Helm for %d dial(s): %s%s",
             theme, len(targets), ", ".join(d for d, _ in targets),
-            f" (options: {sorted(payload.get('config', {}).keys())})"
-            if "config" in payload else "",
+            f" (transient options: {sorted(request['config'])})"
+            if "config" in request else "",
         )
 
     async def _send_announcement(call) -> None:

@@ -46,15 +46,27 @@ class ThemeRequestAttributionTests(unittest.TestCase):
             self.assertEqual(payload["slug"], "random")
             self.assertEqual(payload["requested_by"], "automation")
 
-    def test_transient_options_keep_the_direct_cmd_theme_path(self):
-        # theme_options are the one thing theme_request cannot carry, so
-        # that push still goes straight to the dial (and stays unaudited —
-        # documented in helm#521).
-        pubs = self._push(theme="wedding", theme_options={"initials": "T+J"})
-        self.assertTrue(pubs)
+    def test_transient_options_ride_the_helm_request(self):
+        # helm#538: until 1.16.0 a push WITH options bypassed Helm and
+        # published cmd/theme unretained, so the broker's retained slot
+        # kept Helm's previous theme and every reconnect replayed it. Now
+        # the options ride the theme_request as ``config`` and Helm merges
+        # them transiently over the dial's stored config.
+        pubs = self._push(theme="wedding", theme_options={"initials": "T+J", "_private": 1})
+        self.assertEqual(len(pubs), 2, "one request per resolved dial")
         for topic, payload, _retain in pubs:
-            self.assertTrue(topic.endswith("/cmd/theme"))
-            self.assertEqual(payload, {"id": "wedding", "config": {"initials": "T+J"}})
+            self.assertTrue(topic.endswith("/theme_request"), topic)
+            self.assertEqual(
+                payload,
+                {"slug": "wedding", "requested_by": "automation", "config": {"initials": "T+J"}},
+            )
+
+    def test_nothing_publishes_to_cmd_theme_directly(self):
+        # The direct cmd/theme path is gone: with or without options every
+        # push is a theme_request, so Helm owns the single retained slot.
+        for data in ({"theme": "arcanum"}, {"theme": "wedding", "theme_options": {"initials": "X"}}):
+            for topic, _payload, _retain in self._push(**data):
+                self.assertFalse(topic.endswith("/cmd/theme"), topic)
 
 
 if __name__ == "__main__":

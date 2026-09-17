@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.15.2"  # 1.15.2 = push_theme routes through Helm with requested_by so the audit row names who asked (helm#521)
+    EXPECTED_VERSION = "1.16.0"  # 1.16.0 = push_theme options ride the theme_request as transient config; the direct unretained cmd/theme path is gone (helm#538)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
