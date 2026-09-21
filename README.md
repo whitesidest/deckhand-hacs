@@ -369,13 +369,19 @@ automation:
           device_id: <ha_device_id>
           title: "{{ state_attr('media_player.spotify', 'media_title') }}"
           artist: "{{ state_attr('media_player.spotify', 'media_artist') }}"
-          album_art_url: "{{ state_attr('media_player.spotify', 'entity_picture') }}"
           source: "Spotify"
           is_playing: "{{ is_state('media_player.spotify', 'playing') }}"
 ```
 
 Leave `title` blank to revert the dial to its theme-default home face
 (e.g. when the track ends / player goes idle).
+
+`album_art_url` is optional and is sent to the dial as-is: the dial fetches
+it with no credentials and decodes **baseline JPEG only**, so a
+`media_player_proxy` link (what `entity_picture` holds) will not render —
+HA serves whatever the source has (PNG, progressive JPEG, or an error page
+once the token rotates). For a Home Assistant media player, use
+`update_from_media_player` or a binding instead — see below.
 
 ### Automatic now-playing push
 
@@ -386,6 +392,19 @@ hands-off auto-push, open the Deckhand integration's **Configure**
 dialog and add one or more dial &harr; media_player bindings — state
 changes are streamed to the dial automatically (debounced so volume /
 seek chatter doesn't spam the bus).
+
+Album art on this path is served by the integration itself, not by Home
+Assistant's `media_player_proxy`: the `cmd/now_playing` payload's
+`album_art_url` points at `<your HA URL>/api/deckhand/art/<key>.jpg?v=<hash>`,
+where the integration reads the cover straight from the media player
+entity and transcodes it to a **baseline JPEG** (alpha flattened onto
+black, at most 360 px on the long edge, at most 768 KB) — the only format
+the dial's decoder accepts. The URL uses HA's internal URL when one is
+configured, so the dial must be able to reach it on the LAN. The route is
+unauthenticated (the dial has no session) but keyed by a per-runtime
+secret, and an unknown key is a plain 404. Transcoded art is cached and
+served with an `ETag`; if the source stops answering, the last good cover
+for that player is served instead of an error page.
 
 ### Sensor Value
 
