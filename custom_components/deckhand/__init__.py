@@ -18,14 +18,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 
-try:  # get_url is in core since 2021 but guard for older installs
-    from homeassistant.helpers.network import NoURLAvailableError, get_url
-except ImportError:  # pragma: no cover - defensive fallback
-    get_url = None  # type: ignore[assignment]
-
-    class NoURLAvailableError(Exception):  # type: ignore[no-redef]
-        """Fallback when helpers.network is unavailable."""
-
+from .album_art import album_art_url_for, register_album_art_view
 from .dial_text import (
     FACE_MOUNT_TEXT_KEYS,
     INVITATION_TEXT_KEYS,
@@ -220,6 +213,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # persistent face listeners.
         "_sensor_watch_bindings": {},
     }
+
+    # The dial GETs album art from us (baseline JPEG, dial-sized) rather
+    # than from HA's media_player_proxy. One view per runtime.
+    register_album_art_view(hass)
 
     # Subscribe to status heartbeats for dial discovery
     status_topic = TOPIC_STATUS.format(team_id=team_id)
@@ -763,35 +760,6 @@ async def _async_add_dial_entities(
     async_dispatcher_send(hass, f"{DOMAIN}_dial_discovered", dial_id, data)
 
 
-def _resolve_entity_picture_url(hass: HomeAssistant, entity_picture: str) -> str:
-    """Turn an ``entity_picture`` attribute into something the dial can GET.
-
-    HA hands us relative paths like
-    ``/api/media_player_proxy/media_player.x?token=...&cache=...``. The
-    dial can't resolve those on its own — it needs an absolute URL. We
-    prefer the internal URL (LAN-local, no Nabu Casa round-trip) and
-    fall back to whatever ``get_url`` returns, then concatenate. Absolute
-    URLs are passed through untouched so Jellyfin's own poster URLs keep
-    working. The signed token embedded in the URL is short-lived (HA
-    rotates it) but stable long enough for the dial to fetch before the
-    track changes.
-    """
-    if not entity_picture:
-        return ""
-    if entity_picture.startswith(("http://", "https://")):
-        return entity_picture
-    if get_url is None:
-        return entity_picture
-    try:
-        base = get_url(hass, allow_ip=True, prefer_external=False)
-    except NoURLAvailableError:
-        try:
-            base = get_url(hass, allow_ip=True, prefer_external=True)
-        except NoURLAvailableError:
-            return entity_picture
-    return f"{base.rstrip('/')}{entity_picture}"
-
-
 def _extract_now_playing(
     hass: HomeAssistant, entity_id: str
 ) -> dict[str, Any] | None:
@@ -817,7 +785,11 @@ def _extract_now_playing(
     artist = fields["artist"]
     source = fields["source"]
 
-    album_art_url = _resolve_entity_picture_url(hass, attr.get("entity_picture") or "")
+    # Never the raw entity_picture: HA's media_player_proxy serves PNG /
+    # progressive JPEG / an HTML error once its token rotates, none of which
+    # the dial's JPEGDEC can decode (ack_failure not_jpeg). The integration
+    # serves its own baseline-JPEG copy instead — see album_art.py.
+    album_art_url = album_art_url_for(hass, entity_id, attr.get("entity_picture") or "")
 
     is_playing = state.state == "playing"
 

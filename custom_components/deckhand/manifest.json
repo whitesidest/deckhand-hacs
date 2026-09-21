@@ -7,6 +7,7 @@
   "config_flow": true,
   "home_assistant": "2024.1.0",
   "dependencies": [
+    "http",
     "mqtt"
   ],
   "documentation": "https://github.com/whitesidest/deckhand-hacs",

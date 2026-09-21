@@ -776,7 +776,7 @@ update_now_playing:
         text:
     album_art_url:
       name: Album art URL
-      description: Optional — the dial will attempt to fetch and display.
+      description: Optional — sent to the dial as-is, so it must be a baseline JPEG the dial can reach without credentials. For a Home Assistant media player use update_from_media_player instead, which serves the art transcoded.
       selector:
         text:
     source:
