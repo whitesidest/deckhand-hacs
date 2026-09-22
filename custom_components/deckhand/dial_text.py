@@ -36,6 +36,21 @@ _SPACE_RUN_RE = re.compile(r"[ \t]{2,}")
 _SPACE_AROUND_NEWLINE_RE = re.compile(r"[ \t]*\n[ \t]*")
 
 
+def humanize_entity_id(entity_id) -> str:
+    """``sensor.office_temperature`` → ``Office Temperature``.
+
+    The fallback whenever a label is missing and Home Assistant has no
+    friendly_name. The dial renders whatever label it is handed (the sensor
+    marquee prints an empty label as the raw id in capitals; the perimeter
+    ring paints ``friendly_name`` on its attention line), so a raw entity id
+    must never leave this integration as display text.
+    """
+    entity_id = str(entity_id or "").strip()
+    tail = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+    words = tail.replace("_", " ").replace("-", " ").split()
+    return " ".join(w.capitalize() for w in words) or entity_id
+
+
 def strip_emoji_for_dial(text):
     """Remove emoji — and only emoji. Gaps left behind are closed; line
     breaks are kept; text with no emoji comes back exactly as given."""
