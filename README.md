@@ -97,6 +97,44 @@ data:
   duration: 30
 ```
 
+### `deckhand.start_timer`
+Start the dial's Timer face — the same timer a guest starts on the glass —
+for `minutes` (1-1440) or `seconds` (10-86400; wins when both are given).
+`label` (up to 32 characters, emoji removed) and `from_name` are optional.
+
+```yaml
+service: deckhand.start_timer
+data:
+  device_id: <ha_device_id>
+  minutes: 10
+  label: "Pasta"
+  from_name: "Kitchen"
+```
+
+Publishes `cmd/timer` `{"action": "start", "seconds": 600, "label": "Pasta",
+"from": "Kitchen"}`. Not retained: a dial that is offline at the call does
+not start the timer when it comes back.
+
+### `deckhand.cancel_timer`
+Stop the running timer (`{"action": "cancel"}`); a no-op when none is up.
+
+```yaml
+service: deckhand.cancel_timer
+data:
+  device_id: <ha_device_id>
+```
+
+### `deckhand.add_timer_time`
+Extend the running timer by `seconds` (10-3600 per call) —
+`{"action": "add", "seconds": 300}`.
+
+```yaml
+service: deckhand.add_timer_time
+data:
+  device_id: <ha_device_id>
+  seconds: 300
+```
+
 ### `deckhand.reboot`
 Reboot a dial.
 
@@ -127,10 +165,11 @@ automation:
 
 ## Timers in automations
 
-Every dial gets a **Timer** event entity (`event.<dial>_timer`) with two
-event types: `started` when a guest starts the dial's timer and `completed`
-when it reaches zero. Pick it in the automation editor like any event
-entity, or in YAML:
+Every dial gets a **Timer** event entity (`event.<dial>_timer`) with three
+event types: `started` when the dial's timer starts (a guest on the glass or
+`deckhand.start_timer`), `completed` when it reaches zero, and `cancelled`
+when it is stopped early (on the glass or by `deckhand.cancel_timer`). Pick
+it in the automation editor like any event entity, or in YAML:
 
 ```yaml
 automation:
@@ -174,8 +213,103 @@ react differently to a 3-minute egg and a 45-minute roast:
 ```
 
 The same moments are also on the bus as `deckhand_dial_event` with
-`type: timer_start` / `type: timer_complete` (payload `item_label`,
-`minutes`), for automations that already listen there.
+`type: timer_start` / `type: timer_complete` / `type: timer_cancel`
+(payload `item_label`, `minutes`), for automations that already listen
+there.
+
+### Starting a dial timer from Home Assistant
+
+`deckhand.start_timer`, `deckhand.cancel_timer` and `deckhand.add_timer_time`
+(above) drive the same Timer face from an automation. Two ways to put a
+voice pipeline in front of them:
+
+#### Voice: Assist custom sentence
+
+A `conversation` custom sentence captures the minutes; the automation
+passes them straight through. "Start a ten minute timer on the kitchen
+dial" starts the dial's timer, and the dial itself rings when it is done.
+
+```yaml
+# configuration.yaml
+conversation:
+  intents:
+    StartDialTimer:
+      - "start a {minutes} minute timer on the kitchen dial"
+      - "set a {minutes} minute timer on the kitchen dial"
+      - "kitchen dial timer for {minutes} minutes"
+
+intent_script:
+  StartDialTimer:
+    speech:
+      text: "Starting a {{ minutes }} minute timer on the kitchen dial"
+    action:
+      - service: deckhand.start_timer
+        data:
+          device_id: <kitchen_dial_device_id>
+          minutes: "{{ minutes }}"
+          from_name: "Assist"
+```
+
+Or, if you would rather keep the action in an automation, trigger on the
+sentence and read the slot from the trigger:
+
+```yaml
+automation:
+  - alias: "Kitchen dial timer by voice"
+    trigger:
+      - platform: conversation
+        command:
+          - "start a {minutes} minute timer on the kitchen dial"
+          - "set a {minutes} minute timer on the kitchen dial"
+    action:
+      - service: deckhand.start_timer
+        data:
+          device_id: <kitchen_dial_device_id>
+          minutes: "{{ trigger.slots.minutes }}"
+          from_name: "Assist"
+      - set_conversation_response: "Starting a {{ trigger.slots.minutes }} minute timer on the kitchen dial"
+```
+
+Assist's own timer sentences ("set a timer for ten minutes") stay with
+Assist; these sentences name the dial so the two do not collide.
+
+#### Mirror a `timer.*` helper onto the dial
+
+If the voice pipeline (or anything else) already starts a Home Assistant
+timer helper, mirror it: when `timer.kitchen` starts, start the dial timer
+for the same length, and cancel the dial when the helper is cancelled.
+`timer.started` carries the entity and the helper's `duration` attribute
+holds the length as `H:MM:SS`.
+
+```yaml
+automation:
+  - alias: "Kitchen timer helper → kitchen dial"
+    trigger:
+      - platform: event
+        event_type: timer.started
+        event_data:
+          entity_id: timer.kitchen
+    action:
+      - service: deckhand.start_timer
+        data:
+          device_id: <kitchen_dial_device_id>
+          seconds: >-
+            {% set d = state_attr('timer.kitchen', 'duration').split(':') | map('int') | list %}
+            {{ d[0] * 3600 + d[1] * 60 + d[2] }}
+          label: "{{ state_attr('timer.kitchen', 'friendly_name') }}"
+          from_name: "Home Assistant"
+
+  - alias: "Kitchen timer helper cancelled → kitchen dial"
+    trigger:
+      - platform: event
+        event_type: timer.cancelled
+        event_data:
+          entity_id: timer.kitchen
+    action:
+      - service: deckhand.cancel_timer
+        data:
+          device_id: <kitchen_dial_device_id>
+```
 
 ## Waking a cold speaker from the Audio face
 

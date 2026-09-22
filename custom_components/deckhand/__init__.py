@@ -56,6 +56,7 @@ from .const import (
     TOPIC_CMD_OVERLAY,
     TOPIC_CMD_REBOOT,
     TOPIC_CMD_SENSOR_VALUE,
+    TOPIC_CMD_TIMER,
     TOPIC_CMD_SUNSET,
     TOPIC_HACS_PRESENCE,
     TOPIC_SENSOR_WATCHES,
@@ -159,6 +160,47 @@ _OVERLAY_STRING_FIELDS = (
 _OVERLAY_TEXT_KEYS = ("subtitle_text", "home_message", "sensor_label", "label")
 _NOW_PLAYING_TEXT_KEYS = ("title", "artist", "album")
 _SENSOR_VALUE_TEXT_KEYS = ("label", "value")
+
+# Timer face bounds (1.18.0, start_timer / cancel_timer / add_timer_time).
+# The dial's own picker runs 1..1440 minutes; seconds lets a voice
+# sentence ask for "ninety seconds" without rounding to a minute. The
+# floor of 10 s keeps a mis-heard "one" from flashing a timer that
+# completes before the guest looks up. Extending a running timer is
+# capped at an hour per call — an automation that loops add_timer_time
+# every second must not be able to pin a timer open forever.
+TIMER_MIN_SECONDS = 10
+TIMER_MAX_SECONDS = 86400
+TIMER_MIN_MINUTES = 1
+TIMER_MAX_MINUTES = 1440
+TIMER_ADD_MIN_SECONDS = 10
+TIMER_ADD_MAX_SECONDS = 3600
+# The Timer face draws the label on one line of the dial's mid font; 32
+# code points is what fits without a marquee (the menu label limit).
+TIMER_LABEL_MAX = 32
+
+
+def _coerce_number(value: Any, field: str) -> float:
+    """Turn a service-call number into a float, or raise the usual error.
+
+    The number selector hands the handler an int or a float; a YAML
+    automation may hand it a string ("10") or a template result ("10.0").
+    ``bool`` is an int subclass and is refused — ``minutes: true`` is a
+    typo, not one minute.
+    """
+    if isinstance(value, bool):
+        raise ServiceValidationError(f"{field} must be a number (got {value!r}).")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value.strip())
+        except ValueError as exc:
+            raise ServiceValidationError(
+                f"{field} must be a number (got {value!r})."
+            ) from exc
+    raise ServiceValidationError(f"{field} must be a number (got {value!r}).")
+
+
 _OVERLAY_SUBTITLE_MODES = {
     "theme", "custom", "date", "date_year", "ical_next_event", "none",
 }
@@ -1395,6 +1437,117 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             celebration_animation,
             celebration_theme,
         )
+
+    # ── Timer face: start / cancel / add (1.18.0) ─────────────────────
+    # Three services drive the dial's Timer face over cmd/timer so an
+    # automation or an Assist sentence ("start a ten minute timer on the
+    # kitchen dial") does what a guest does on the glass. Same posture as
+    # send_countdown: one non-retained publish per resolved dial, nothing
+    # waits for an ack. The dial reports back through its timer_start /
+    # timer_complete / timer_cancel events, which the Timer event entity
+    # exposes as started / completed / cancelled.
+
+    def _timer_targets(call, service: str) -> list[tuple[str, str]]:
+        device_id = call.data.get("device_id")
+        targets = _resolve_targets(hass, device_id)
+        if not targets:
+            _LOGGER.warning(
+                "%s: could not resolve device_id %s to any dial(s)",
+                service, device_id,
+            )
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        return targets
+
+    async def _publish_timer(targets: list[tuple[str, str]], payload: dict[str, Any]) -> None:
+        body = json.dumps(payload)
+        for dial_id, team_id in targets:
+            topic = TOPIC_CMD_TIMER.format(team_id=team_id, dial_id=dial_id)
+            await mqtt.async_publish(hass, topic, body)
+
+    async def _start_timer(call) -> None:
+        """Start the dial's Timer face for ``minutes`` or ``seconds``.
+
+        ``seconds`` wins when both are given: a voice sentence that
+        captured "ninety seconds" fills ``seconds`` while an automation's
+        default ``minutes`` may still be present. Validation runs before
+        target resolution so a bad duration is reported as such even when
+        the device is also wrong.
+        """
+        await _require_admin(call)
+        raw_seconds = call.data.get("seconds")
+        raw_minutes = call.data.get("minutes")
+        if raw_seconds not in (None, ""):
+            seconds_f = _coerce_number(raw_seconds, "seconds")
+            if not TIMER_MIN_SECONDS <= seconds_f <= TIMER_MAX_SECONDS:
+                raise ServiceValidationError(
+                    f"seconds must be between {TIMER_MIN_SECONDS} and "
+                    f"{TIMER_MAX_SECONDS} (got {raw_seconds!r})."
+                )
+            seconds = int(round(seconds_f))
+        elif raw_minutes not in (None, ""):
+            minutes_f = _coerce_number(raw_minutes, "minutes")
+            if not TIMER_MIN_MINUTES <= minutes_f <= TIMER_MAX_MINUTES:
+                raise ServiceValidationError(
+                    f"minutes must be between {TIMER_MIN_MINUTES} and "
+                    f"{TIMER_MAX_MINUTES} (got {raw_minutes!r})."
+                )
+            seconds = int(round(minutes_f * 60))
+        else:
+            raise ServiceValidationError(
+                "start_timer needs minutes (1-1440) or seconds (10-86400)."
+            )
+
+        # The Timer face draws the label and the sender (helm#399).
+        label = strip_emoji_for_dial(str(call.data.get("label") or "")).strip()
+        if len(label) > TIMER_LABEL_MAX:
+            raise ServiceValidationError(
+                f"label must be at most {TIMER_LABEL_MAX} characters (got {len(label)})."
+            )
+        from_name = strip_emoji_for_dial(
+            str(call.data.get("from_name") or "Home Assistant")
+        ).strip() or "Home Assistant"
+
+        targets = _timer_targets(call, "start_timer")
+        payload: dict[str, Any] = {
+            "action": "start",
+            "seconds": seconds,
+            "label": label,
+            "from": from_name,
+        }
+        await _publish_timer(targets, payload)
+        _LOGGER.info(
+            "start_timer: %ds label=%r from=%r → %d dial(s)",
+            seconds, label, from_name, len(targets),
+        )
+
+    async def _cancel_timer(call) -> None:
+        """Stop the dial's running timer; a no-op on the dial if none is up."""
+        await _require_admin(call)
+        targets = _timer_targets(call, "cancel_timer")
+        await _publish_timer(targets, {"action": "cancel"})
+        _LOGGER.info("cancel_timer → %d dial(s)", len(targets))
+
+    async def _add_timer_time(call) -> None:
+        """Add ``seconds`` to the dial's running timer (10 s to an hour)."""
+        await _require_admin(call)
+        raw_seconds = call.data.get("seconds")
+        if raw_seconds in (None, ""):
+            raise ServiceValidationError(
+                f"seconds is required ({TIMER_ADD_MIN_SECONDS}-{TIMER_ADD_MAX_SECONDS})."
+            )
+        seconds_f = _coerce_number(raw_seconds, "seconds")
+        if not TIMER_ADD_MIN_SECONDS <= seconds_f <= TIMER_ADD_MAX_SECONDS:
+            raise ServiceValidationError(
+                f"seconds must be between {TIMER_ADD_MIN_SECONDS} and "
+                f"{TIMER_ADD_MAX_SECONDS} (got {raw_seconds!r})."
+            )
+        seconds = int(round(seconds_f))
+        targets = _timer_targets(call, "add_timer_time")
+        await _publish_timer(targets, {"action": "add", "seconds": seconds})
+        _LOGGER.info("add_timer_time: +%ds → %d dial(s)", seconds, len(targets))
 
     async def _apply_overlay(call) -> None:
         """Apply a transient runtime overlay to a dial or room.
@@ -3024,6 +3177,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "send_announcement", _send_announcement)
     if not hass.services.has_service(DOMAIN, "send_countdown"):
         hass.services.async_register(DOMAIN, "send_countdown", _send_countdown)
+    if not hass.services.has_service(DOMAIN, "start_timer"):
+        hass.services.async_register(DOMAIN, "start_timer", _start_timer)
+    if not hass.services.has_service(DOMAIN, "cancel_timer"):
+        hass.services.async_register(DOMAIN, "cancel_timer", _cancel_timer)
+    if not hass.services.has_service(DOMAIN, "add_timer_time"):
+        hass.services.async_register(DOMAIN, "add_timer_time", _add_timer_time)
     if not hass.services.has_service(DOMAIN, "reboot"):
         hass.services.async_register(DOMAIN, "reboot", _reboot)
     if not hass.services.has_service(DOMAIN, "set_dnd"):

@@ -52,6 +52,13 @@ TOPIC_CMD_NOW_PLAYING = "deckhand/{team_id}/dial/{dial_id}/cmd/now_playing"
 #         treats the empty retained payload as a no-op.
 TOPIC_CMD_DND = "deckhand/{team_id}/dial/{dial_id}/cmd/dnd"
 TOPIC_CMD_SENSOR_VALUE = "deckhand/{team_id}/dial/{dial_id}/cmd/sensor_value"
+# cmd/timer: drive the dial's Timer face from HA (start / cancel / add).
+# Fire-and-forget like cmd/announce — NOT retained. A timer is a moment,
+# not state: a dial that reconnects five minutes later must not start a
+# ten-minute timer someone asked for before it went offline. The dial
+# answers with its usual timer_start / timer_complete / timer_cancel
+# events, which is how an automation learns what actually happened.
+TOPIC_CMD_TIMER = "deckhand/{team_id}/dial/{dial_id}/cmd/timer"
 
 # sensor_watches: retained per-dial list of HA entity_ids the dial's
 # current sensor face is watching. Helm + Console publish this on every
