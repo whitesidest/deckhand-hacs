@@ -2,10 +2,10 @@
 
 No Home Assistant runtime in this env (see the sibling tests), so this pins
 what an automation author relies on: the platform is registered, the entity
-offers exactly ``started`` and ``completed``, both firmware event names map
-to them, the raw bus event keeps its wire names, and the README documents
-the entity. A negative control makes sure the map does not swallow events
-it should ignore.
+offers exactly ``started``, ``completed`` and ``cancelled`` (1.18.0), all
+three firmware event names map to them, the raw bus event keeps its wire
+names, and the README documents the entity. A negative control makes sure
+the map does not swallow events it should ignore.
 
 Run with:  python3 -m unittest tests/test_timer_event_entity.py
 """
@@ -41,9 +41,16 @@ class TimerEventEntityTests(unittest.TestCase):
         self.assertIsNotNone(block, "PLATFORMS list missing from const.py")
         self.assertIn('"event"', block.group(1))
 
-    def test_both_firmware_events_map_to_the_two_entity_types(self):
+    def test_all_firmware_events_map_to_the_three_entity_types(self):
         types = _timer_event_types()
-        self.assertEqual(types, {"timer_start": "started", "timer_complete": "completed"})
+        self.assertEqual(
+            types,
+            {
+                "timer_start": "started",
+                "timer_complete": "completed",
+                "timer_cancel": "cancelled",
+            },
+        )
 
     def test_unrelated_events_are_not_in_the_map(self):
         # Negative control: a button press or an NFC tap must not become a
@@ -87,7 +94,7 @@ class TimerEventEntityTests(unittest.TestCase):
         text = README.read_text(encoding="utf-8")
         self.assertIn("## Timers in automations", text)
         self.assertIn("event.<dial>_timer", text)
-        for kind in ("`started`", "`completed`"):
+        for kind in ("`started`", "`completed`", "`cancelled`"):
             self.assertIn(kind, text)
 
 

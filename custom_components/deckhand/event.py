@@ -1,13 +1,19 @@
 """Event platform: one ``Timer`` event entity per dial.
 
-The dial already publishes ``timer_start`` / ``timer_complete`` on its event
-topic and the integration already re-fires every dial event as
-``deckhand_dial_event`` on the bus. Automating off that works, but it is a
-raw bus event: nothing to pick in the automation editor, and the author has
-to know the wire names. An ``event`` entity gives each dial a "Timer" that
-shows up under the device with two event types — ``started`` and
-``completed`` — that the editor offers directly, and that carries the
-label and length of the timer as attributes.
+The dial already publishes ``timer_start`` / ``timer_complete`` /
+``timer_cancel`` on its event topic and the integration already re-fires
+every dial event as ``deckhand_dial_event`` on the bus. Automating off that
+works, but it is a raw bus event: nothing to pick in the automation editor,
+and the author has to know the wire names. An ``event`` entity gives each
+dial a "Timer" that shows up under the device with three event types —
+``started``, ``completed`` and ``cancelled`` — that the editor offers
+directly, and that carries the label and length of the timer as attributes.
+
+``cancelled`` (1.18.0) fires whether the guest cancelled on the glass or an
+automation called ``deckhand.cancel_timer``: the dial reports what happened
+to its timer, not who asked. An automation that armed something on
+``started`` (lights, a hood fan) needs it to stand down on cancel just as
+it does on complete.
 
 Both paths fire for the same timer; ``deckhand_dial_event`` stays raw and
 unchanged (see tests/test_nfc_event_paths.py for why).
@@ -32,6 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 TIMER_EVENT_TYPES = {
     "timer_start": "started",
     "timer_complete": "completed",
+    "timer_cancel": "cancelled",
 }
 
 
@@ -61,9 +68,12 @@ async def async_setup_entry(
 
 
 class DeckhandTimerEvent(DeckhandEntity, EventEntity):
-    """``started`` when a guest starts the dial's timer, ``completed`` when
-    it reaches zero. Attributes: ``label`` (the timer's menu label) and
-    ``minutes`` (the length it was set to; absent on firmware before 0.4.125)."""
+    """``started`` when the dial's timer starts (a guest on the glass or
+    ``deckhand.start_timer``), ``completed`` when it reaches zero,
+    ``cancelled`` when it is stopped early (on the glass or by
+    ``deckhand.cancel_timer``). Attributes: ``label`` (the timer's label)
+    and ``minutes`` (the length it was set to; absent on firmware before
+    0.4.125)."""
 
     _attr_name = "Timer"
     _attr_icon = "mdi:timer-outline"

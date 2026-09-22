@@ -248,6 +248,111 @@ send_countdown:
       selector:
         text:
 
+start_timer:
+  name: Start Timer
+  description: >
+    Start the dial's Timer face — the same timer a guest starts by hand
+    on the glass — from an automation or a voice sentence ("start a ten
+    minute timer on the kitchen dial"). Give minutes or seconds; when
+    both are set, seconds wins. The dial confirms through its Timer
+    event entity (started / completed / cancelled), so a follow-up
+    automation can react when it rings. Nothing is retained: a dial
+    that is offline when you call this does not start the timer later.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial (or Room) to start the timer on.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    minutes:
+      name: Minutes
+      description: >
+        Length of the timer in minutes (1-1440). Required unless seconds
+        is given.
+      example: 10
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          unit_of_measurement: minutes
+          mode: box
+    seconds:
+      name: Seconds
+      description: >
+        Length of the timer in seconds (10-86400), for lengths that are
+        not whole minutes. Overrides minutes when both are set.
+      example: 90
+      selector:
+        number:
+          min: 10
+          max: 86400
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+    label:
+      name: Label
+      description: >
+        Short name shown with the countdown ("Pasta", "Laundry"). Up to
+        32 characters; emoji are removed because the dial cannot draw
+        them.
+      example: "Pasta"
+      selector:
+        text:
+    from_name:
+      name: From
+      description: Who set the timer, shown on the face.
+      default: "Home Assistant"
+      selector:
+        text:
+
+cancel_timer:
+  name: Cancel Timer
+  description: >
+    Stop the dial's running timer and return the dial to its clock. Does
+    nothing if no timer is running. The dial fires a cancelled event on
+    its Timer entity so anything armed on started can stand down.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial (or Room) whose timer to cancel.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+
+add_timer_time:
+  name: Add Timer Time
+  description: >
+    Extend the dial's running timer by a number of seconds ("add five
+    minutes"). Does nothing if no timer is running. Capped at one hour
+    per call.
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial (or Room) whose timer to extend.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    seconds:
+      name: Seconds
+      description: How many seconds to add (10-3600).
+      required: true
+      example: 300
+      selector:
+        number:
+          min: 10
+          max: 3600
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+
 reboot:
   name: Reboot
   description: Reboot a Deckhand dial.
