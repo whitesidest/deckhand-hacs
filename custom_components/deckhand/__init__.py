@@ -22,6 +22,7 @@ from .album_art import album_art_url_for, register_album_art_view
 from .dial_text import (
     FACE_MOUNT_TEXT_KEYS,
     INVITATION_TEXT_KEYS,
+    humanize_entity_id,
     strip_emoji_for_dial,
     strip_emoji_keys,
 )
@@ -866,7 +867,8 @@ def _build_sensor_value_payload(
         return None
     payload: dict[str, Any] = {
         "entity_id": str(entity_id)[:128],
-        "label": str(label or state.attributes.get("friendly_name") or "")[:64],
+        # Never empty: the dial prints an empty label as the raw id in capitals.
+        "label": str(label or state.attributes.get("friendly_name") or humanize_entity_id(entity_id))[:64],
         "value": value[:48],
         "unit": unit[:8],
     }
@@ -2077,7 +2079,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             return None
         out: dict[str, Any] = {
             "id": bid.strip(),
-            "friendly_name": str(raw.get("friendly_name", bid)),
+            # Painted on the ring's attention line and hover narration —
+            # a humanised id, never the raw one, when the caller gave none.
+            "friendly_name": str(raw.get("friendly_name") or "").strip() or humanize_entity_id(bid),
             "angular_center": float(raw.get("angular_center", 0.0)),
         }
         if "angular_width" in raw:
