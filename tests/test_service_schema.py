@@ -590,6 +590,8 @@ class QuietInvitationTests(unittest.TestCase):
             "strip_emoji_keys": _dial_text.strip_emoji_keys,
             "INVITATION_TEXT_KEYS": _dial_text.INVITATION_TEXT_KEYS,
             "FACE_MOUNT_TEXT_KEYS": _dial_text.FACE_MOUNT_TEXT_KEYS,
+            # 1.17.1 — perimeter friendly_name / sensor label fallback.
+            "humanize_entity_id": _dial_text.humanize_entity_id,
             "Any": Any,
             "json": _json,
             "mqtt": _Mqtt,
@@ -1129,12 +1131,19 @@ class PerimeterBindingShapingTests(unittest.TestCase):
             if isinstance(n, ast.FunctionDef) and n.name in wanted
         ]
         assert {f.name for f in fns} == wanted, "shaper functions not found"
+        import importlib.util
+
+        _spec = importlib.util.spec_from_file_location("dial_text", INIT_PY.parent / "dial_text.py")
+        _dial_text = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_dial_text)
         ns: dict = {
             "Any": Any,
             "_LOGGER": logging.getLogger("test"),
             "PERIMETER_TREATMENTS": (
                 "state_color", "ripple", "gradient", "flash", "sweep",
             ),
+            # 1.17.1 — friendly_name falls back to a humanised id.
+            "humanize_entity_id": _dial_text.humanize_entity_id,
         }
         exec(
             compile(ast.Module(body=fns, type_ignores=[]), INIT_PY.name, "exec"),
@@ -1150,7 +1159,8 @@ class PerimeterBindingShapingTests(unittest.TestCase):
     def test_minimal_binding_defaults(self):
         out = self.build({"id": "front_door"})
         self.assertEqual(out["id"], "front_door")
-        self.assertEqual(out["friendly_name"], "front_door")
+        # 1.17.1: a binding without a friendly_name is named for the dial, never the raw id.
+        self.assertEqual(out["friendly_name"], "Front Door")
         self.assertEqual(out["treatment"], "state_color")
         # angular_width omitted -> firmware default (24) applies on-dial.
         self.assertNotIn("angular_width", out)
