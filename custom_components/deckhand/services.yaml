@@ -1956,13 +1956,12 @@ send_invitation:
 
     Quiet mode: set ``presentation: menu`` and the invitation appears
     as an item in the dial's menu instead of taking the screen —
-    selecting the item accepts. Because Helm injects the menu item
-    server-side, dials sharing a menu profile all see it, and the
+    selecting the item accepts. Because the server injects the menu
+    item, dials sharing a menu profile all see it, and the
     hold/decline/theme fields below do not apply. Quiet invitations
-    require the Helm MQTT listener on your broker (they ride the
-    ``invitation_request`` plane); on a pure-offline / Console-only
-    broker they are silently dropped — use the default ``prompt``
-    presentation there.
+    ride the ``invitation_request`` plane — both Helm and Console
+    implement it (deckhand-console#33), so this works on either
+    backend.
   fields:
     device_id:
       name: Devices
@@ -1997,8 +1996,8 @@ send_invitation:
         ``prompt`` (default) takes the screen with the touch-and-hold
         card. ``menu`` is the quiet path — the invitation becomes a
         selectable item in the dial's menu (selecting accepts), routed
-        through Helm so every dial sharing the menu profile sees it.
-        ``menu`` requires the Helm MQTT listener on the broker.
+        server-side so every dial sharing the menu profile sees it.
+        Works on either Helm or Console.
       default: prompt
       selector:
         select:
