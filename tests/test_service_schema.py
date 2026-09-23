@@ -545,7 +545,10 @@ class QuietInvitationTests(unittest.TestCase):
         helpers = [
             n for n in tree.body
             if isinstance(n, ast.FunctionDef)
-            and n.name in ("_resolve_transition", "_announcement_duration_s")
+            and n.name in (
+                "_resolve_transition", "_announcement_duration_s",
+                "_build_on_accept_from_fields", "_split_ha_service",
+            )
         ]
 
         publishes: list[tuple] = []
