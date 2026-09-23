@@ -986,29 +986,143 @@ update_sensor_value:
         text:
 
 # ── Phase 6 dial-platform — face dispatch services ──────────────────────
-# Faces are functional UI layers (Perimeter Pulse, future room-aware
+# Faces are functional UI layers (the Perimeter Ring overlay, future room-aware
 # faces). Themes are atmosphere; faces are function. A face is mounted
 # onto a dial and either takes over the screen entirely
 # (FACE_OWNS_SCREEN) or paints a thin overlay on top of the active
-# theme (default — Perimeter Pulse uses this mode).
+# theme (default — the Perimeter Ring overlay uses this mode; the
+# full-screen Perimeter Pulse face is retired).
 
-mount_perimeter_pulse:
-  name: Mount Perimeter Pulse
+mount_perimeter_ring:
+  name: Mount Perimeter Ring
   description: >
-    Mount the Perimeter Pulse face on a dial. The bar wraps the rim of
-    the round display, with each binding owning an angular segment
-    rendered via a treatment (state_color / ripple / gradient / flash /
-    sweep). Retained — the dial re-mounts the same face on reboot.
+    Mount the Perimeter Ring overlay on a dial. The ring wraps the rim
+    of the round display and composites over whatever face the dial is
+    showing (clock, sensor, charge...) - it never takes over the screen.
+    Each binding owns an angular segment rendered via a treatment
+    (state_color / ripple / gradient / flash / sweep). Retained - the
+    dial re-mounts the same ring on reboot. Mounting also unmounts and
+    clears the retired full-screen Perimeter Pulse face so a stale
+    retained mount of it cannot resurrect on reconnect.
 
     Rings mounted here are SELF-DRIVEN: drive them from your own
     automations with update_perimeter_state (event-driven, local, no
     Helm dependency). For a PERSISTENT ring fed automatically, publish
     the face through Helm instead (Faces editor or the integration
-    API's face/publish endpoint) — Helm's poller then reads the bound
+    API's face/publish endpoint) - Helm's poller then reads the bound
     entities every ~10s, including numeric_threshold comparisons. The
     numeric_threshold / above_state / below_state binding keys are
     honored by Helm's feeder ONLY; under the HACS path use an HA
     template to compute the state string (see the grid_power example).
+  fields:
+    device_id:
+      name: Device
+      description: The Deckhand dial to mount the face on.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    bindings:
+      name: Bindings
+      description: >
+        Array (max 16) of { id (required), friendly_name, angular_center
+        (degrees, 0 = 12 o'clock, clockwise), angular_width (degrees,
+        default 24, ignored when contiguous), treatment, state,
+        active_state (default "open"), base_color "#RRGGBB",
+        active_color "#RRGGBB", value (0-1, gradient position),
+        opacity (0-1, overrides bar_opacity), numeric_threshold,
+        above_state, below_state }. Treatments: state_color
+        (locks / doors), ripple (motion / doorbell), gradient
+        (continuous value), flash (alarms), sweep (ambient zone).
+        The numeric_threshold trio (float(entity state) > threshold →
+        above_state, else below_state) only takes effect on
+        Helm-published faces — Helm's feeder does the comparison; the
+        dial itself only string-matches. Under the HACS self-driven
+        path they pass through harmlessly; compute the state string
+        with an HA template instead (grid_power example below).
+      required: true
+      example: |
+        - id: front_door
+          friendly_name: Front Door
+          angular_center: 0
+          angular_width: 24
+          treatment: state_color
+          active_state: unlocked
+          base_color: "#68C8D8"
+          active_color: "#E89858"
+        - id: living_motion
+          friendly_name: Living Room
+          angular_center: 90
+          angular_width: 30
+          treatment: ripple
+          active_state: "on"
+          base_color: "#3A4A5A"
+          active_color: "#9AC8E8"
+        # Grid energy: exporting lights the segment green. The
+        # threshold keys below only matter if this same config is
+        # published via Helm; for THIS service, pair the binding with
+        # an automation that pushes update_perimeter_state, e.g.
+        # state: "{{ 'exporting' if states('sensor.grid_power')|float(0) > 0 else 'importing' }}"
+        - id: sensor.grid_power
+          friendly_name: Grid
+          angular_center: 180
+          angular_width: 40
+          treatment: state_color
+          active_state: exporting
+          numeric_threshold: 0
+          above_state: exporting
+          below_state: importing
+          base_color: "#30435C"
+          active_color: "#3FAE6A"
+      selector:
+        object:
+    contiguous:
+      name: Contiguous Ring
+      description: >
+        When true, bindings sort by angular_center and each segment
+        extends to the midpoint with its neighbors — the whole rim is
+        owned. When false (default), each segment uses its own
+        angular_width with empty space in between.
+      default: false
+      selector:
+        boolean:
+    bar_thickness:
+      name: Bar Thickness
+      description: Bar width in pixels. Default 7. Range 1-40.
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 40
+          unit_of_measurement: px
+    bar_opacity:
+      name: Bar Opacity
+      description: >
+        Face-level opacity 0-1. Default 0.94 — clear-as-day; lower values
+        let the theme breathe through. Per-binding opacity overrides if
+        set on a binding.
+      default: 0.94
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+    # subtitle_text removed — DEAD as of firmware 0.4.21. The narrative
+    # line renders the dial's normal subtitle (apply_overlay machinery),
+    # so the face never contradicts the operator's subtitle.
+
+mount_perimeter_pulse:
+  name: Mount Perimeter Ring (legacy name)
+  description: >
+    Legacy name for mount_perimeter_ring, kept so existing automations
+    keep working. The full-screen Perimeter Pulse face is retired; this
+    service now mounts the Perimeter Ring overlay (same bindings and
+    appearance fields) over the dial's current face, and unmounts the
+    retired pulse face on the way. New automations should call
+    mount_perimeter_ring. Self-driven: pair with update_perimeter_state,
+    or publish the face through Helm for a fed ring (numeric_threshold
+    keys are honored by Helm's feeder only; use an HA template here).
   fields:
     device_id:
       name: Device
@@ -1113,9 +1227,9 @@ update_perimeter_state:
     Push state for one or more perimeter ring bindings. Use this from
     HA automations: when a lock unlocks, when a motion sensor trips,
     when a temperature changes. Set "event: true" to trigger ripple /
-    flash animation for that frame. Updates the Perimeter Pulse face by
-    default; set layer to "ring" to update a perimeter ring overlay
-    drawn around a sensor, clock or charge face instead.
+    flash animation for that frame. Updates the Perimeter Ring overlay
+    (cmd/face/perimeter_ring/state) whether it was mounted with
+    mount_perimeter_ring or authored on a sensor, clock or charge face.
 
     This is the live lane for HACS-mounted (self-driven) rings. For
     numeric sensors, compute the state string with a template, e.g.
@@ -1153,16 +1267,12 @@ update_perimeter_state:
     layer:
       name: Ring layer
       description: >
-        Which ring the update is for. "pulse" (the default, and the only
-        target before 1.14.3) is the Perimeter Pulse face. "ring" is the
-        perimeter ring overlay drawn around another face (a sensor, clock
-        or charge face with a perimeter ring). The integration can't see
-        which one a dial is showing, so pick the one you mounted. There is
-        no "both": the dial sends a state that isn't for its overlay to
-        its main face, so a second copy would reach the Perimeter Pulse
-        face twice instead of being ignored.
+        Kept for automations written when the full-screen Perimeter Pulse
+        face still existed. "ring" (the default) is the Perimeter Ring
+        overlay; "pulse" is a retired alias that now reaches the same
+        ring. Either way the update goes to cmd/face/perimeter_ring/state.
       required: false
-      default: "pulse"
+      default: "ring"
       example: "ring"
       selector:
         select:
@@ -1188,7 +1298,7 @@ mount_face:
       name: Face ID
       description: Face identifier registered in firmware.
       required: true
-      example: "perimeter_pulse"
+      example: "perimeter_ring"
       selector:
         text:
     payload:

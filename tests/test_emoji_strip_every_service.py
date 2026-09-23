@@ -232,7 +232,7 @@ class DirectToTheDial(_ServiceTest):
 
     def test_perimeter_friendly_names_are_stripped_and_states_are_not(self):
         p = self.one(
-            "mount_perimeter_pulse", "/cmd/face/perimeter_pulse/mount",
+            "mount_perimeter_pulse", "/cmd/face/perimeter_ring/mount",
             bindings=[{"id": "gate", "friendly_name": "Gate 🚪", "state": "open",
                        "active_state": "open"}],
         )

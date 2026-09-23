@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.16.0"  # 1.16.0 = push_theme options ride the theme_request as transient config; the direct unretained cmd/theme path is gone (helm#538)
+    EXPECTED_VERSION = "1.18.1"  # 1.18.1 = the perimeter services target perimeter_ring; the full-screen perimeter_pulse face is retired (mount_perimeter_ring added, mount_perimeter_pulse kept as an alias)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
