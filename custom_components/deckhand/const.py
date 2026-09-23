@@ -85,32 +85,39 @@ TOPIC_CMD_FACE_MOUNT  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/mo
 TOPIC_CMD_FACE_STATE  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/state"
 TOPIC_CMD_FACE_CONFIG = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/config"
 TOPIC_CMD_FACE_UNMOUNT = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/unmount"
-# Temporary/contextual menu items — consumed by Helm's MQTT listener
-# (handle_menu_request), which writes a real MenuItem on the dial's
-# resolved profile and republishes the menu. SF-parity path.
+# Temporary/contextual menu items — consumed by the server's MQTT listener
+# (handle_menu_request on Helm, hacs_requests._menu on Console), which
+# writes a real MenuItem on the dial's resolved profile and republishes
+# the menu. SF-parity path on Helm; deckhand-console#33 on Console.
 TOPIC_MENU_REQUEST = "deckhand/{team_id}/dial/{dial_id}/menu_request"
 # Alarm lifecycle (create/enable/disable/snooze/dismiss) — consumed by
-# Helm's MQTT listener (handle_alarm_request). SF-invocable parity.
+# the server's MQTT listener (handle_alarm_request on Helm, hacs_requests
+# on Console — deckhand-console#33). SF-invocable parity on Helm.
 TOPIC_ALARM_REQUEST = "deckhand/{team_id}/dial/{dial_id}/alarm_request"
 # Per-dial settings (clock face/format, label, timezone, haptics) — Helm
-# handle_settings_request. SF SetDialSettings / REST parity.
+# handle_settings_request / Console hacs_requests._settings (deckhand-
+# console#33). SF SetDialSettings / REST parity on Helm.
 #
-# This MUST go through Helm rather than straight to cmd/config. Helm's
-# Dial row is the source of truth for every one of these keys: it rebuilds
-# the COMPLETE cmd/config from the row on boot, on "Push to dial", and on
-# any settings save. A publish that skips the row therefore holds only
-# until the next full push, then silently reverts — which is exactly what
-# the old set_timezone did.
+# This MUST go through the server rather than straight to cmd/config. The
+# server's Dial/Device row is the source of truth for every one of these
+# keys: it rebuilds the COMPLETE cmd/config from the row on boot, on
+# "Push to dial", and on any settings save. A publish that skips the row
+# therefore holds only until the next full push, then silently reverts —
+# which is exactly what the old set_timezone did. Both Helm and Console
+# implement this same full-rebuild contract.
 TOPIC_SETTINGS_REQUEST = "deckhand/{team_id}/dial/{dial_id}/settings_request"
-# Credential lifecycle (enroll/revoke/restore) — Helm handle_credential_request.
+# Credential lifecycle (enroll/revoke/restore) — Helm handle_credential_request
+# / Console hacs_requests._credential (deckhand-console#33).
 TOPIC_CREDENTIAL_REQUEST = "deckhand/{team_id}/dial/{dial_id}/credential_request"
-# Schedule lifecycle (create/enable/disable/fire) — Helm handle_schedule_request.
+# Schedule lifecycle (create/enable/disable/fire) — Helm handle_schedule_request
+# / Console hacs_requests._schedule (deckhand-console#33).
 TOPIC_SCHEDULE_REQUEST = "deckhand/{team_id}/dial/{dial_id}/schedule_request"
-# Invitation lifecycle routed through Helm (handle_invitation_request).
-# Only quiet/menu invitations (helm#165) use this — Helm injects the
+# Invitation lifecycle routed through the server (handle_invitation_request
+# on Helm, hacs_requests._invitation on Console — deckhand-console#33).
+# Only quiet/menu invitations (helm#165) use this — the server injects the
 # MenuItem server-side and fans out per menu profile. Prompt invitations
 # keep the direct cmd/face/invitation/mount publish (broker-only, no
-# Helm required).
+# server round-trip required).
 TOPIC_INVITATION_REQUEST = "deckhand/{team_id}/dial/{dial_id}/invitation_request"
 # Theme selections that need SERVER-side resolution — today just the
 # "random" sentinel (Helm picks a random activated theme, excluding the
