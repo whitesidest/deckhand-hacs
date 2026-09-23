@@ -1521,11 +1521,25 @@ create_alarm:
     days:
       name: Days of Week
       description: >
-        List of weekday numbers (0=Mon .. 6=Sun). Empty/omitted = every
-        day (unless a one-time date is set).
-      example: "[0, 1, 2, 3, 4]"
+        Empty/omitted = every day (unless a one-time date is set).
       selector:
-        object:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: "0"
+            - label: Tuesday
+              value: "1"
+            - label: Wednesday
+              value: "2"
+            - label: Thursday
+              value: "3"
+            - label: Friday
+              value: "4"
+            - label: Saturday
+              value: "5"
+            - label: Sunday
+              value: "6"
     one_time_date:
       name: One-Time Date
       description: >
@@ -1753,10 +1767,25 @@ create_schedule:
         time:
     days:
       name: Days of Week
-      description: List of weekday numbers (0=Mon .. 6=Sun). Empty = daily.
-      example: "[4, 5]"
+      description: Empty = daily.
       selector:
-        object:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: "0"
+            - label: Tuesday
+              value: "1"
+            - label: Wednesday
+              value: "2"
+            - label: Thursday
+              value: "3"
+            - label: Friday
+              value: "4"
+            - label: Saturday
+              value: "5"
+            - label: Sunday
+              value: "6"
     recurrence:
       name: Recurrence
       description: daily (default) or hourly (uses interval fields).
@@ -2089,7 +2118,7 @@ send_invitation:
             - iris
             - dissolve
     on_accept:
-      name: On-accept payload
+      name: On-accept payload (advanced)
       description: >
         Optional opaque JSON object echoed by the dial when accepted.
         For pure-HA flows you can omit this — listen for the
@@ -2098,8 +2127,88 @@ send_invitation:
         another consumer of the response event) should route the
         action server-side. Shape:
         ``{ type: "fire_ha_service" | "push_theme" | ..., data: {...} }``.
+        PRECEDENCE: if this is set, it wins outright and every
+        ``on_*`` field below is ignored. Leave this empty to use the
+        structured fields instead.
       selector:
         object:
+    on_accept_type:
+      name: On accept, then…
+      description: >
+        Structured alternative to ``on_accept`` above — pick what
+        Helm/the dial should do when this invitation is accepted. Only
+        used when ``on_accept`` is empty. "none" (default) records the
+        answer and does nothing further.
+      selector:
+        select:
+          options:
+            - label: "Do nothing — just record the answer"
+              value: "none"
+            - label: "Change the dial's theme"
+              value: "push_theme"
+            - label: "Show a face"
+              value: "push_face"
+            - label: "Show a message"
+              value: "push_message"
+            - label: "Set the subtitle"
+              value: "push_subtitle"
+            - label: "Run a Home Assistant service"
+              value: "fire_ha_service"
+            - label: "Call a webhook"
+              value: "webhook"
+    on_theme_slug:
+      name: On accept — theme slug
+      description: Used when On Accept Type is "push_theme".
+      example: "sunset-cove"
+      selector:
+        text:
+    on_face_id:
+      name: On accept — face ID
+      description: >
+        Used when On Accept Type is "push_face". The numeric id of a
+        Face saved in Helm/Console — HA has no way to list a team's
+        Faces, so type the id directly.
+      selector:
+        text:
+    on_message_text:
+      name: On accept — message text
+      description: Used when On Accept Type is "push_message". Capped at 240 characters.
+      selector:
+        text:
+    on_subtitle_text:
+      name: On accept — subtitle text
+      description: Used when On Accept Type is "push_subtitle". Capped at 120 characters.
+      selector:
+        text:
+    on_ha_domain:
+      name: On accept — HA service domain
+      description: >
+        Used when On Accept Type is "fire_ha_service". E.g. "light".
+        May be left blank if On Accept HA Service is fully-qualified
+        (e.g. "light.turn_on").
+      example: "light"
+      selector:
+        text:
+    on_ha_service:
+      name: On accept — HA service
+      description: >
+        Used when On Accept Type is "fire_ha_service". E.g. "turn_on",
+        or a fully-qualified "light.turn_on" (splits automatically
+        when On Accept HA Service Domain is blank).
+      example: "turn_on"
+      selector:
+        text:
+    on_ha_entity:
+      name: On accept — HA target entity
+      description: Optional entity to target for the fired service.
+      selector:
+        entity:
+    on_webhook_url:
+      name: On accept — webhook URL
+      description: Used when On Accept Type is "webhook". Full http(s) URL.
+      selector:
+        text:
+          type: url
 
 cancel_invitation:
   name: Cancel Invitation

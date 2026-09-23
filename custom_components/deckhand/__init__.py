@@ -2746,7 +2746,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
         payload: dict[str, Any] = {"action": "create", "name": name, "time": fire_time}
         if isinstance(call.data.get("days"), list):
-            payload["days"] = call.data["days"]
+            try:
+                payload["days"] = [int(d) for d in call.data["days"]]
+            except (TypeError, ValueError) as exc:
+                raise ServiceValidationError("days must be a list of weekday numbers") from exc
         for k in ("one_time_date", "label", "sunrise_color"):
             if call.data.get(k):
                 payload[k] = str(call.data[k])
@@ -2902,7 +2905,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             if k in payload:
                 payload[k] = strip_emoji_for_dial(payload[k])
         if isinstance(call.data.get("days"), list):
-            payload["days"] = call.data["days"]
+            try:
+                payload["days"] = [int(d) for d in call.data["days"]]
+            except (TypeError, ValueError) as exc:
+                raise ServiceValidationError("days must be a list of weekday numbers") from exc
         for k in ("minute_offset", "interval_hours", "hour_start", "hour_end",
                   "announcement_duration_s"):
             if call.data.get(k) is not None:
@@ -3072,7 +3078,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 request["from_name"] = menu_from[:64]
             menu_on_accept = call.data.get("on_accept")
             if isinstance(menu_on_accept, dict) and menu_on_accept:
+                # Raw JSON always wins over the flat on_* fields below.
                 request["on_accept"] = menu_on_accept
+            else:
+                structured_on_accept = _build_on_accept_from_fields(call)
+                if structured_on_accept is not None:
+                    request["on_accept"] = structured_on_accept
             # A quiet invitation still mounts a prompt when the guest
             # selects the menu item, so the choice is meaningful here
             # too — Helm bakes it into the item's stored payload.
@@ -3140,7 +3151,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # with type=invitation_response and branches in the automation.
         on_accept = call.data.get("on_accept")
         if isinstance(on_accept, dict) and on_accept:
+            # Raw JSON always wins over the flat on_* fields below.
             payload["on_accept"] = on_accept
+        else:
+            structured_on_accept = _build_on_accept_from_fields(call)
+            if structured_on_accept is not None:
+                payload["on_accept"] = structured_on_accept
 
         if transition != DEFAULT_TRANSITION:
             payload["transition"] = transition
@@ -3501,6 +3517,80 @@ def _resolve_transition(raw: Any) -> str:
             f"transition must be one of {', '.join(TRANSITIONS)} (got {raw!r})"
         )
     return value
+
+
+def _split_ha_service(domain: str, service: str) -> tuple[str, str]:
+    """Normalize ``(domain, service)`` where service may be fully qualified.
+
+    Mirrors Helm's ``split_service`` (apps/integrations/services/ha_domains.py)
+    — an operator (or a hand-typed field) may put "light.turn_on" straight
+    into the service field rather than splitting domain/service themselves.
+    """
+    if service and "." in service:
+        head, tail = service.split(".", 1)
+        return head, tail
+    return domain, service
+
+
+def _build_on_accept_from_fields(call) -> dict[str, Any] | None:
+    """Assemble a structured ``on_accept`` payload from the flat on_* fields.
+
+    send_invitation's ``on_accept`` is a raw opaque object — the only
+    shape the dial and Helm actually consume — but hand-typing JSON in
+    the HA service-call editor is exactly the UX gap this integration
+    is trying to close elsewhere. These flat fields (on_accept_type +
+    on_theme_slug/on_face_id/on_ha_domain/...) are a convenience that
+    assembles the same shape; they mirror Helm's
+    ``_build_on_accept_data`` (apps/invitations/views.py) field-by-field
+    so a team behaves the same whether they configure this from Helm's
+    web UI or from an HA automation.
+
+    ADDITIVE ONLY: the raw ``on_accept`` object always wins when set —
+    callers check that first and only fall back to this helper when it
+    is empty (see both call sites in ``_send_invitation``). Returns
+    ``None`` for "none"/unset or when the selected type's required
+    field(s) are missing, so a half-filled form degrades to "no
+    on-accept action" rather than sending a broken payload.
+    """
+    on_accept_type = str(call.data.get("on_accept_type") or "none").strip()
+
+    if on_accept_type == "push_theme":
+        slug = str(call.data.get("on_theme_slug") or "").strip()
+        return {"type": "push_theme", "data": {"theme_slug": slug}} if slug else None
+
+    if on_accept_type == "push_face":
+        # face_pk mirrors Helm/Console: a Face record's id, resolved to
+        # kind+payload at push time — not something HA can enumerate.
+        face_pk = str(call.data.get("on_face_id") or "").strip()
+        return {"type": "push_face", "data": {"face_pk": face_pk}} if face_pk else None
+
+    if on_accept_type == "push_message":
+        text = str(call.data.get("on_message_text") or "").strip()
+        return {"type": "push_message", "data": {"text": text[:240]}} if text else None
+
+    if on_accept_type == "push_subtitle":
+        text = str(call.data.get("on_subtitle_text") or "").strip()
+        return {"type": "push_subtitle", "data": {"text": text[:120]}} if text else None
+
+    if on_accept_type == "fire_ha_service":
+        domain = str(call.data.get("on_ha_domain") or "").strip()
+        service = str(call.data.get("on_ha_service") or "").strip()
+        entity = str(call.data.get("on_ha_entity") or "").strip()
+        domain, service = _split_ha_service(domain, service)
+        if not (domain and service):
+            return None
+        data: dict[str, Any] = {"domain": domain[:64], "service": service[:64]}
+        if entity:
+            data["service_data"] = {"entity_id": entity[:128]}
+        return {"type": "fire_ha_service", "data": data}
+
+    if on_accept_type == "webhook":
+        url = str(call.data.get("on_webhook_url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return None
+        return {"type": "webhook", "data": {"url": url[:512]}}
+
+    return None
 
 
 def _resolve_targets(
