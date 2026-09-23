@@ -1,15 +1,13 @@
-"""update_perimeter_state can drive the perimeter_ring overlay, not just the pulse hero (helm#415).
+"""update_perimeter_state publishes to the perimeter_ring overlay whatever ``layer`` says.
 
-A dial draws a perimeter ring two ways: the ``perimeter_pulse`` HERO face, or
-the ``perimeter_ring`` OVERLAY around a sensor / clock / charge face. Firmware
-``face_dispatch_state`` (face.h) sends ``cmd/face/perimeter_ring/state`` to the
-overlay slot and every other state topic to the hero, so an update only
-reaches a ring overlay if its topic names ``perimeter_ring``. The service used
-to hard-code ``perimeter_pulse``, so an automation could never move a ring
-authored on another face.
-
-HACS keeps no record of which ring a dial shows, so the caller picks with
-``layer``. Omitting it must keep today's behaviour exactly.
+``layer`` (helm#415) used to pick between the ``perimeter_pulse`` HERO face
+and the ``perimeter_ring`` OVERLAY around a sensor / clock / charge face —
+firmware ``face_dispatch_state`` (face.h) routes a state topic to the mounted
+face whose id it names, so the topic had to say which. The pulse face is
+retired (1.18.1): there is one ring, and every layer value — ``ring``,
+``pulse`` and omitted — lands on ``cmd/face/perimeter_ring/state`` with the
+same payload. The field stays so automations written for it keep validating;
+an unknown value is still refused rather than guessed.
 
 Runs the REAL handler through the harness in test_emoji_strip_every_service.py.
 """
@@ -40,19 +38,20 @@ class PerimeterStateLayer(_ServiceTest):
             self.assertEqual(topic, f"deckhand/{team_id}/dial/{dial_id}{suffix}")
             self.assertEqual(payload, WIRE)
 
-    def test_omitted_layer_still_updates_the_pulse_face(self):
-        self._assert_only(self._sent(), PULSE)
+    def test_omitted_layer_updates_the_ring_overlay(self):
+        self._assert_only(self._sent(), RING)
 
-    def test_layer_pulse_updates_the_pulse_face(self):
-        self._assert_only(self._sent(layer="pulse"), PULSE)
-
-    def test_layer_ring_updates_the_ring_overlay_with_the_same_payload(self):
+    def test_layer_ring_updates_the_ring_overlay(self):
         self._assert_only(self._sent(layer="ring"), RING)
 
+    def test_layer_pulse_is_a_retired_alias_for_the_ring(self):
+        # An automation written for the pulse face keeps moving the ring
+        # it now sees; nothing goes to the retired topic.
+        sent = self._sent(layer="pulse")
+        self._assert_only(sent, RING)
+        self.assertFalse([t for t, _ in sent if t.endswith(PULSE)])
+
     def test_an_unknown_layer_is_refused_not_guessed(self):
-        # "both" is deliberately not a layer: the dial hands a state that
-        # isn't for its overlay to the hero, so the pulse face would get it
-        # twice. A typo must not silently fall back to the pulse face either.
         for bad in ("both", "Ring", "perimeter_ring", 1):
             with self.subTest(layer=bad):
                 with self.assertRaises(_SVE):
@@ -61,9 +60,9 @@ class PerimeterStateLayer(_ServiceTest):
 
 
 class LayerIsDocumented(unittest.TestCase):
-    def test_services_yaml_offers_pulse_and_ring_defaulting_to_pulse(self):
+    def test_services_yaml_offers_ring_and_pulse_defaulting_to_ring(self):
         with open(SERVICES_YAML, encoding="utf-8") as f:
             field = yaml.safe_load(f)["update_perimeter_state"]["fields"]["layer"]
         self.assertEqual(field["selector"]["select"]["options"], ["pulse", "ring"])
-        self.assertEqual(field["default"], "pulse")
+        self.assertEqual(field["default"], "ring")
         self.assertFalse(field.get("required", False))

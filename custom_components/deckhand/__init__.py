@@ -33,9 +33,12 @@ from .const import (
     DEFAULT_TRANSITION,
     DOMAIN,
     MANUFACTURER,
+    FACE_ID_ALIASES,
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
+    PERIMETER_FACE_ID,
     PERIMETER_MAX_BINDINGS,
+    PERIMETER_RETIRED_FACE_ID,
     PERIMETER_STATE_DEFAULT_LAYER,
     PERIMETER_STATE_LAYERS,
     PERIMETER_TREATMENTS,
@@ -145,7 +148,7 @@ _IANA_TO_POSIX = {
 # Face-shaping fields are kept here because real automations need them
 # ("when air quality drops below X, flip Tyler into a 4-quad sensor
 # face for an hour"). For persistent face state, use ``mount_face`` /
-# ``mount_perimeter_pulse`` — those publish retained
+# ``mount_perimeter_ring`` — those publish retained
 # cmd/face/<kind>/mount messages that survive reboots.
 _OVERLAY_STRING_FIELDS = (
     "subtitle_text",
@@ -2305,8 +2308,43 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
             await mqtt.async_publish(hass, topic, body, retain=retained)
 
-    async def _mount_perimeter_pulse(call) -> None:
-        """Mount Perimeter Pulse with structured bindings + appearance.
+    async def _publish_face_unmount(face_id: str, targets: list) -> None:
+        """``cmd/face/<id>/unmount`` AND an empty retained publish on the
+        mount topic. The clear is the point: without it the next broker
+        (re)connect replays the stale retained mount and resurrects the
+        face that was just dismissed (retained-lifecycle contract)."""
+        for dial_id, team_id in targets:
+            unmount_topic = TOPIC_CMD_FACE_UNMOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
+            )
+            mount_topic = TOPIC_CMD_FACE_MOUNT.format(
+                team_id=team_id, dial_id=dial_id, face_id=face_id,
+            )
+            await mqtt.async_publish(hass, unmount_topic, "{}", retain=False)
+            await mqtt.async_publish(hass, mount_topic, "", retain=True)
+
+    async def _retire_pulse_mount(targets: list) -> None:
+        """Companion to every perimeter_ring mount / unmount: take down the
+        retired ``perimeter_pulse`` hero face and clear its retained mount.
+
+        A dial that was running the old full-screen face still has that
+        mount retained on the broker; mounting the ring alone would leave
+        it there to resurrect on the next reconnect and cover the ring.
+        Naming a face that is not up is a no-op on the dial (firmware
+        0.4.123 acks no_face_active), so this is safe on a fleet that
+        never saw the pulse face.
+        """
+        await _publish_face_unmount(PERIMETER_RETIRED_FACE_ID, targets)
+
+    async def _mount_perimeter_ring(call) -> None:
+        """Mount the Perimeter Ring overlay with structured bindings +
+        appearance. Registered as ``mount_perimeter_ring`` and, for the
+        automations that predate the rename, ``mount_perimeter_pulse``.
+
+        The ring composites over whatever face the dial is showing —
+        it never takes the screen. It replaced the full-screen Perimeter
+        Pulse face, which is retired: same payload, so the legacy service
+        name simply lands on ``cmd/face/perimeter_ring/mount`` now.
 
         Two ways to run a perimeter ring — pick one:
 
@@ -2353,7 +2391,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
         if len(bindings) > PERIMETER_MAX_BINDINGS:
             _LOGGER.warning(
-                "mount_perimeter_pulse: %d bindings supplied, firmware "
+                "mount_perimeter_ring: %d bindings supplied, firmware "
                 "renders at most %d — truncating",
                 len(bindings), PERIMETER_MAX_BINDINGS,
             )
@@ -2365,13 +2403,13 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # silently swallowing it so old automations get a breadcrumb.
         if call.data.get("subtitle_text"):
             _LOGGER.warning(
-                "mount_perimeter_pulse: subtitle_text is ignored by "
+                "mount_perimeter_ring: subtitle_text is ignored by "
                 "firmware >= 0.4.21 — use apply_overlay subtitle_mode/"
                 "subtitle_text instead",
             )
 
         payload: dict[str, Any] = {
-            "face_id": "perimeter_pulse",
+            "face_id": PERIMETER_FACE_ID,
             "schema_version": 1,
             "bindings": bindings,
         }
@@ -2392,31 +2430,32 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             except (TypeError, ValueError):
                 pass
 
-        await _publish_face_mount("perimeter_pulse", payload, targets, retained=True)
+        # Retired hero face first, then the ring: a stale retained pulse
+        # mount must not outlive the ring that replaced it.
+        await _retire_pulse_mount(targets)
+        await _publish_face_mount(PERIMETER_FACE_ID, payload, targets, retained=True)
         _LOGGER.info(
-            "mount_perimeter_pulse: %d binding(s) → %d dial(s)",
+            "mount_perimeter_ring: %d binding(s) → %d dial(s)",
             len(bindings), len(targets),
         )
 
     async def _update_perimeter_state(call) -> None:
-        """Push state updates for one or more Perimeter Pulse bindings.
+        """Push state updates for one or more Perimeter Ring bindings.
 
         The live lane for HACS-mounted (self-driven) rings. Wire
-        contract (fw pp_on_state, canonical since 0.4.21):
+        contract (fw pr_on_state, canonical since 0.4.21):
         ``{"bindings": [{id, state | value | event}]}`` — ``state`` is
         string-matched against the binding's ``active_state``,
         ``value`` (0-1) drives the gradient treatment, ``event: true``
         fires a ripple/flash pulse. Helm-published faces don't need
         this — Helm's feeder pushes the same topic itself.
 
-        ``layer`` picks the ring the update is for (helm#415): ``pulse``
-        (default, the only target before 1.14.3) is the Perimeter Pulse
-        hero face; ``ring`` is the ``perimeter_ring`` overlay authored on
-        a sensor / clock / charge face. Same payload either way — the
-        overlay's pr_on_state reads the same keys. Deliberately not
-        "both": firmware routes a state topic that doesn't name the
-        mounted overlay to the HERO, so a second copy would land on the
-        pulse face twice rather than being ignored.
+        ``layer`` (helm#415) used to pick between the Perimeter Pulse
+        hero face (``pulse``) and the ``perimeter_ring`` overlay
+        (``ring``). The pulse face is retired, so both values — and an
+        omitted layer — publish to ``cmd/face/perimeter_ring/state``;
+        the field stays so automations written for it keep validating.
+        An unknown value is still refused rather than guessed.
         """
         await _require_admin(call)
         layer = call.data.get("layer") or PERIMETER_STATE_DEFAULT_LAYER
@@ -2493,7 +2532,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="invalid_face_id",
             )
-        face_id = face_id.strip()
+        # A retired face id lands on its replacement (perimeter_pulse →
+        # perimeter_ring): same payload, and the automation keeps working.
+        face_id = FACE_ID_ALIASES.get(face_id.strip(), face_id.strip())
         payload = call.data.get("payload") or {}
         if not isinstance(payload, dict):
             raise ServiceValidationError(
@@ -2508,10 +2549,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
 
         # Stamp face_id and schema_version into the payload if the caller
-        # didn't supply them — the firmware tolerates either shape.
+        # didn't supply them — the firmware tolerates either shape. A
+        # retired id inside the payload is rewritten too, so the body
+        # never contradicts the topic.
+        if payload.get("face_id") in FACE_ID_ALIASES:
+            payload["face_id"] = FACE_ID_ALIASES[payload["face_id"]]
         payload.setdefault("face_id", face_id)
         payload.setdefault("schema_version", 1)
         retained = bool(call.data.get("retained", True))
+        if face_id == PERIMETER_FACE_ID:
+            await _retire_pulse_mount(targets)
         await _publish_face_mount(face_id, payload, targets, retained=retained)
         _LOGGER.info(
             "mount_face: %s → %d dial(s) (retained=%s)",
@@ -2541,24 +2588,19 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="invalid_face_id",
             )
+        # perimeter_pulse is retired: an automation that dismisses it
+        # means the ring that replaced it, and the retired topics get
+        # swept alongside so neither can resurrect.
+        face_id = FACE_ID_ALIASES.get(face_id, face_id)
         targets = _resolve_targets(hass, device_id)
         if not targets:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        for dial_id, team_id in targets:
-            unmount_topic = TOPIC_CMD_FACE_UNMOUNT.format(
-                team_id=team_id, dial_id=dial_id, face_id=face_id,
-            )
-            mount_topic = TOPIC_CMD_FACE_MOUNT.format(
-                team_id=team_id, dial_id=dial_id, face_id=face_id,
-            )
-            await mqtt.async_publish(hass, unmount_topic, "{}", retain=False)
-            # Empty retained publish clears the stale mount (retained-
-            # lifecycle contract: state-driving cmd/* gets an empty-clear
-            # at lifecycle end).
-            await mqtt.async_publish(hass, mount_topic, "", retain=True)
+        if face_id == PERIMETER_FACE_ID:
+            await _retire_pulse_mount(targets)
+        await _publish_face_unmount(face_id, targets)
         _LOGGER.info("unmount_face: %s → %d dial(s)", face_id, len(targets))
 
     async def _add_menu_item(call) -> None:
@@ -3203,10 +3245,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "set_dial_settings", _set_dial_settings)
     if not hass.services.has_service(DOMAIN, "set_sunset"):
         hass.services.async_register(DOMAIN, "set_sunset", _set_sunset)
-    if not hass.services.has_service(DOMAIN, "mount_perimeter_pulse"):
-        hass.services.async_register(
-            DOMAIN, "mount_perimeter_pulse", _mount_perimeter_pulse
-        )
+    # One handler, two names: mount_perimeter_ring is the name that reads
+    # right today; mount_perimeter_pulse stays so existing automations
+    # keep working (both publish to cmd/face/perimeter_ring/mount).
+    for _svc in ("mount_perimeter_ring", "mount_perimeter_pulse"):
+        if not hass.services.has_service(DOMAIN, _svc):
+            hass.services.async_register(DOMAIN, _svc, _mount_perimeter_ring)
     if not hass.services.has_service(DOMAIN, "update_perimeter_state"):
         hass.services.async_register(
             DOMAIN, "update_perimeter_state", _update_perimeter_state

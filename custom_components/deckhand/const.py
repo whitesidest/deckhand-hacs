@@ -79,7 +79,7 @@ TOPIC_SENSOR_WATCHES = "deckhand/{team_id}/dial/+/sensor_watches"
 TOPIC_HACS_PRESENCE = "deckhand/{team_id}/hacs/presence"
 
 # Phase 6 dial-platform — face dispatch topics. {face_id} is the
-# face identifier (e.g. "perimeter_pulse") chosen by the firmware
+# face identifier (e.g. "perimeter_ring") chosen by the firmware
 # face registry.
 TOPIC_CMD_FACE_MOUNT  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/mount"
 TOPIC_CMD_FACE_STATE  = "deckhand/{team_id}/dial/{dial_id}/cmd/face/{face_id}/state"
@@ -123,24 +123,32 @@ TOPIC_THEME_REQUEST = "deckhand/{team_id}/dial/{dial_id}/theme_request"
 # TOPIC_THEME_REQUEST instead of the direct cmd/theme publish.
 SERVER_RESOLVED_THEMES = ("random",)
 
-# Perimeter Pulse treatment names recognised by the firmware. Kept here so
+# Perimeter Ring treatment names recognised by the firmware. Kept here so
 # the HACS service schema can validate without the user having to re-read
 # the firmware source.
 PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
-# Firmware renders at most this many bindings (PP_MAX_BINDINGS in
-# face_perimeter_pulse.h) — extras are silently dropped on-dial, so the
+# Firmware renders at most this many bindings (PR_MAX_BINDINGS in
+# face_perimeter_ring.h) — extras are silently dropped on-dial, so the
 # integration truncates with a warning instead.
 PERIMETER_MAX_BINDINGS = 16
+# The perimeter ring is ``perimeter_ring``: a ring-only OVERLAY that
+# composites over whatever face the dial is showing (clock, sensor, charge…)
+# and never takes the screen. It replaced the full-screen ``perimeter_pulse``
+# hero face, which is retired. Same payload (bindings, bar_thickness,
+# bar_opacity, contiguous, treatments), so the services kept their names.
+PERIMETER_FACE_ID = "perimeter_ring"
+PERIMETER_RETIRED_FACE_ID = "perimeter_pulse"
+# Retired face ids → the face that replaced them. mount_face / unmount_face
+# callers that still name the old id get the new one.
+FACE_ID_ALIASES = {PERIMETER_RETIRED_FACE_ID: PERIMETER_FACE_ID}
 # update_perimeter_state's ``layer`` field → the face id its state topic
-# names (helm#415). A dial draws a perimeter ring two ways: the
-# ``perimeter_pulse`` HERO face, or the ``perimeter_ring`` OVERLAY that rides
-# on a sensor / clock / charge face. Firmware routes a state topic to the
-# face whose id it names (since 0.4.123 only a mounted face of that id;
-# before, everything but perimeter_ring went to the hero), so the topic has
-# to name the layer. HACS keeps no record of which one a dial shows (Helm
-# does), so the caller says.
-PERIMETER_STATE_LAYERS = {"pulse": "perimeter_pulse", "ring": "perimeter_ring"}
-PERIMETER_STATE_DEFAULT_LAYER = "pulse"
+# names (helm#415). "ring" always named the overlay; "pulse" named the
+# retired hero face and now lands on the ring too, so an automation written
+# for it keeps moving the ring it sees. Firmware routes a state topic to the
+# mounted face whose id it names (since 0.4.123), so the topic has to say
+# perimeter_ring.
+PERIMETER_STATE_LAYERS = {"pulse": PERIMETER_FACE_ID, "ring": PERIMETER_FACE_ID}
+PERIMETER_STATE_DEFAULT_LAYER = "ring"
 
 # ── Doorbell / snapshot image push (cmd/image) ──────────────────────
 # Default dial resolution for image backdrops pushed from HACS. HACS

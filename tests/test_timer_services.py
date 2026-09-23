@@ -391,9 +391,13 @@ class TimerEventCancelledTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_version_bumped_to_1_18_0(self):
+    def test_version_is_at_least_1_18_0(self):
+        # Timers shipped in 1.18.0. A floor, not an equality: the one exact
+        # version literal lives in test_hacs_presence.ManifestTests.
         manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "1.18.0")
+        self.assertGreaterEqual(
+            tuple(int(p) for p in manifest["version"].split(".")), (1, 18, 0),
+        )
 
 
 if __name__ == "__main__":

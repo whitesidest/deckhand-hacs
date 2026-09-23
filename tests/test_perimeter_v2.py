@@ -80,6 +80,8 @@ class ThresholdBindingShapingTests(unittest.TestCase):
             "PERIMETER_TREATMENTS": (
                 "state_color", "ripple", "gradient", "flash", "sweep",
             ),
+            # 1.17.1 — the shaper humanises a missing friendly_name.
+            "humanize_entity_id": lambda bid: bid,
         }
         exec(
             compile(ast.Module(body=fns, type_ignores=[]), INIT_PY.name, "exec"),
@@ -182,7 +184,7 @@ class ServicesSteeringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.services = _load_services()
-        cls.mount = cls.services["mount_perimeter_pulse"]
+        cls.mount = cls.services["mount_perimeter_ring"]
         cls.update = cls.services["update_perimeter_state"]
 
     def test_mount_documents_threshold_keys(self):

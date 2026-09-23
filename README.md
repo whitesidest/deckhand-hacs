@@ -479,6 +479,48 @@ automation:
           theme: "ghost"
 ```
 
+## Perimeter Ring
+
+The Perimeter Ring is a thin ring of up to 16 state segments around the rim
+of the display — door open, washer done, grid exporting. It is an overlay:
+it composites over whatever face the dial is showing (clock, sensor,
+charge…) and never takes over the screen. Mount it with
+`deckhand.mount_perimeter_ring` (retained — survives reboots), drive it from
+your automations with `deckhand.update_perimeter_state`, and take it down
+with `deckhand.unmount_face` (`face_id: perimeter_ring`).
+
+```yaml
+service: deckhand.mount_perimeter_ring
+data:
+  device_id: <ha_device_id>
+  bindings:
+    - id: front_door
+      friendly_name: Front Door
+      angular_center: 0
+      angular_width: 24
+      active_state: unlocked
+      base_color: "#68C8D8"
+      active_color: "#E89858"
+```
+
+```yaml
+service: deckhand.update_perimeter_state
+data:
+  device_id: <ha_device_id>
+  states:
+    - id: front_door
+      state: "{{ states('lock.front_door') }}"
+```
+
+The full-screen **Perimeter Pulse** face is retired in favour of the ring.
+`deckhand.mount_perimeter_pulse` is kept as an alias for
+`mount_perimeter_ring` (same fields, same `cmd/face/perimeter_ring/mount`
+topic) so existing automations keep working; `mount_face` with
+`face_id: perimeter_pulse` is mapped to `perimeter_ring` too, and
+`update_perimeter_state`'s `layer: pulse` reaches the ring. Mounting the
+ring also clears any retained Perimeter Pulse mount so the old face cannot
+resurrect on reconnect.
+
 ## Streaming updates: Now Playing + Sensor Value
 
 Two lightweight streaming services let you push data to the dial's home

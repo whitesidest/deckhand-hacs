@@ -119,6 +119,7 @@ REQUIRED_SERVICES = frozenset({
     "apply_overlay",
     "mount_face",
     "mount_perimeter_pulse",
+    "mount_perimeter_ring",
     "push_theme",
     "reboot",
     "send_announcement",
@@ -990,15 +991,19 @@ class EpochCoercionTests(unittest.TestCase):
 
 
 class PerimeterPulseParityTests(unittest.TestCase):
-    """Pin Perimeter Pulse parity with the fw 0.4.21 mount schema.
+    """Pin Perimeter Ring parity with the fw 0.4.21 mount schema.
 
-    Canonical mount payload (cmd/face/perimeter_pulse/mount):
+    Canonical mount payload (cmd/face/perimeter_ring/mount):
     contiguous / bar_thickness (1-40) / bar_opacity (0-1) / bindings
     (max 16). ``subtitle_text`` is DEAD as of fw 0.4.21 — the firmware
     ignores it (the narrative line renders the dial's normal subtitle),
     so the service must not advertise it. State updates go out on
-    cmd/face/perimeter_pulse/state keyed as ``bindings`` (canonical);
+    cmd/face/perimeter_ring/state keyed as ``bindings`` (canonical);
     ``states`` survives firmware-side as a legacy alias only.
+
+    1.18.1: the full-screen perimeter_pulse face is retired. The service
+    is ``mount_perimeter_ring``; ``mount_perimeter_pulse`` stays as the
+    legacy name (same handler, same fields) so automations keep working.
     """
 
     MOUNT_FIELDS = frozenset({
@@ -1015,9 +1020,20 @@ class PerimeterPulseParityTests(unittest.TestCase):
         return self.services[svc].get("fields") or {}
 
     def test_mount_declares_canonical_fields(self):
-        declared = set(self._fields("mount_perimeter_pulse"))
-        missing = self.MOUNT_FIELDS - declared
-        self.assertFalse(missing, f"mount_perimeter_pulse missing: {sorted(missing)}")
+        for svc in ("mount_perimeter_ring", "mount_perimeter_pulse"):
+            declared = set(self._fields(svc))
+            missing = self.MOUNT_FIELDS - declared
+            self.assertFalse(missing, f"{svc} missing: {sorted(missing)}")
+
+    def test_legacy_pulse_name_declares_the_same_fields_as_the_ring(self):
+        # One handler under two names: the legacy name must not drift into
+        # a narrower (or different) UI surface than the name it aliases.
+        self.assertEqual(
+            set(self._fields("mount_perimeter_pulse")),
+            set(self._fields("mount_perimeter_ring")),
+        )
+        self.assertEqual(self.services["mount_perimeter_ring"]["name"], "Mount Perimeter Ring")
+        self.assertIn("Perimeter Ring", self.services["mount_perimeter_pulse"]["name"])
 
     def test_mount_does_not_advertise_subtitle_text(self):
         # Dead field as of fw 0.4.21 — advertising it in the HA UI would
@@ -1065,11 +1081,11 @@ class PerimeterPulseParityTests(unittest.TestCase):
             (
                 n for n in ast.walk(tree)
                 if isinstance(n, ast.AsyncFunctionDef)
-                and n.name == "_mount_perimeter_pulse"
+                and n.name == "_mount_perimeter_ring"
             ),
             None,
         )
-        self.assertIsNotNone(fn, "_mount_perimeter_pulse handler not found")
+        self.assertIsNotNone(fn, "_mount_perimeter_ring handler not found")
         return ast.get_source_segment(self.src, fn) or ""
 
     def test_mount_handler_never_forwards_subtitle_text(self):
