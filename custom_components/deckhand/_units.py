@@ -41,8 +41,8 @@ DIAL_UNIT_GLYPH_MAP: dict[str, str] = {
     "°": "*",   # DEGREE SIGN — fall back to * even though firmware
                      # fonts often ship °, because HA pairs ° with
                      # superscripts and we want a consistent shape.
-    " ": " ",   # THIN SPACE
-    " ": " ",   # NARROW NO-BREAK SPACE
+    "\u2009": " ",   # THIN SPACE (U+2009)
+    "\u202f": " ",   # NARROW NO-BREAK SPACE (U+202F)
 }
 
 
