@@ -308,6 +308,23 @@ start_timer:
       default: "Home Assistant"
       selector:
         text:
+    name:
+      name: Name
+      description: >
+        Name this timer so several can run at once (up to 3). A start with a
+        new name adds a timer; the same name restarts it. Omit for the single
+        anonymous timer. Also seeds the label when no label is given.
+      example: "Pasta"
+      selector:
+        text:
+    color:
+      name: Ring color
+      description: >
+        Colour of this timer's ring on the dial (#RRGGBB). Omit to let the
+        dial pick a distinct colour per slot.
+      example: "#C9A84C"
+      selector:
+        text:
 
 cancel_timer:
   name: Cancel Timer
@@ -324,6 +341,14 @@ cancel_timer:
         device:
           integration: deckhand
           multiple: true
+    name:
+      name: Name
+      description: >
+        Cancel just this named timer. Omit to cancel every running timer on
+        the dial ("cancel the timer").
+      example: "Pasta"
+      selector:
+        text:
 
 add_timer_time:
   name: Add Timer Time
@@ -352,6 +377,14 @@ add_timer_time:
           step: 1
           unit_of_measurement: seconds
           mode: box
+    name:
+      name: Name
+      description: >
+        Add time to just this named timer. Omit to target the soonest-to-
+        finish timer on the dial.
+      example: "Pasta"
+      selector:
+        text:
 
 reboot:
   name: Reboot

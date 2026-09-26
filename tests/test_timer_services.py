@@ -152,6 +152,30 @@ class StartTimerTests(_ServiceTest):
             p, {"action": "start", "seconds": 600, "label": "Pasta", "from": "Kitchen"},
         )
 
+    def test_name_routes_a_multi_timer_slot_and_seeds_the_label(self):
+        p = self.one("start_timer", minutes=10, name="Pasta")
+        self.assertEqual(p["name"], "Pasta")
+        self.assertEqual(p["label"], "Pasta")   # label falls back to name
+        self.assertEqual(p["seconds"], 600)
+
+    def test_name_and_color_ride_the_wire(self):
+        p = self.one("start_timer", minutes=5, name="Tea", label="Tea", color="#E0736A")
+        self.assertEqual(p["name"], "Tea")
+        self.assertEqual(p["color"], "#E0736A")
+
+    def test_no_name_stays_the_anonymous_single_timer(self):
+        p = self.one("start_timer", minutes=5)
+        self.assertNotIn("name", p)
+        self.assertNotIn("color", p)
+
+    def test_named_cancel_targets_one_bare_cancel_clears_all(self):
+        self.assertEqual(self.one("cancel_timer", name="Pasta"), {"action": "cancel", "name": "Pasta"})
+        self.assertEqual(self.one("cancel_timer"), {"action": "cancel"})
+
+    def test_named_add(self):
+        self.assertEqual(self.one("add_timer_time", seconds=60, name="Pasta"),
+                         {"action": "add", "seconds": 60, "name": "Pasta"})
+
     def test_seconds_alone(self):
         p = self.one("start_timer", seconds=90)
         self.assertEqual(p["action"], "start")
@@ -284,7 +308,7 @@ class ServicesYamlTests(unittest.TestCase):
 
     def test_start_timer_fields_and_selectors(self):
         f = self._fields("start_timer")
-        self.assertEqual(set(f), {"device_id", "minutes", "seconds", "label", "from_name"})
+        self.assertEqual(set(f), {"device_id", "minutes", "seconds", "label", "from_name", "name", "color"})
         self.assertTrue(f["device_id"].get("required"))
         self.assertTrue(f["device_id"]["selector"]["device"].get("multiple"))
         self.assertEqual(f["device_id"]["selector"]["device"].get("integration"), "deckhand")
@@ -303,13 +327,13 @@ class ServicesYamlTests(unittest.TestCase):
 
     def test_cancel_timer_fields(self):
         f = self._fields("cancel_timer")
-        self.assertEqual(set(f), {"device_id"})
+        self.assertEqual(set(f), {"device_id", "name"})
         self.assertTrue(f["device_id"].get("required"))
         self.assertTrue(f["device_id"]["selector"]["device"].get("multiple"))
 
     def test_add_timer_time_fields(self):
         f = self._fields("add_timer_time")
-        self.assertEqual(set(f), {"device_id", "seconds"})
+        self.assertEqual(set(f), {"device_id", "seconds", "name"})
         self.assertTrue(f["seconds"].get("required"))
         self.assertEqual(f["seconds"]["selector"]["number"]["min"], 10)
         self.assertEqual(f["seconds"]["selector"]["number"]["max"], 3600)

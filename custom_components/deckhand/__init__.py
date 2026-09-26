@@ -1513,6 +1513,15 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             str(call.data.get("from_name") or "Home Assistant")
         ).strip() or "Home Assistant"
 
+        # Multi-timer: `name` routes to a named slot on the dial (so several
+        # timers coexist); it also seeds the label when none was given. `color`
+        # tints that timer's ring (#RRGGBB). Both optional — omit them and the
+        # dial uses its single anonymous timer exactly as before.
+        name = strip_emoji_for_dial(str(call.data.get("name") or "")).strip()
+        color = str(call.data.get("color") or "").strip()
+        if name and not label:
+            label = name[:TIMER_LABEL_MAX]
+
         targets = _timer_targets(call, "start_timer")
         payload: dict[str, Any] = {
             "action": "start",
@@ -1520,6 +1529,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             "label": label,
             "from": from_name,
         }
+        if name:
+            payload["name"] = name
+        if color:
+            payload["color"] = color
         await _publish_timer(targets, payload)
         _LOGGER.info(
             "start_timer: %ds label=%r from=%r → %d dial(s)",
@@ -1527,11 +1540,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         )
 
     async def _cancel_timer(call) -> None:
-        """Stop the dial's running timer; a no-op on the dial if none is up."""
+        """Stop the dial's running timer; a no-op on the dial if none is up.
+
+        With `name`, cancels just that named timer; without, cancels every live
+        timer on the dial ("cancel the timer")."""
         await _require_admin(call)
+        name = strip_emoji_for_dial(str(call.data.get("name") or "")).strip()
         targets = _timer_targets(call, "cancel_timer")
-        await _publish_timer(targets, {"action": "cancel"})
-        _LOGGER.info("cancel_timer → %d dial(s)", len(targets))
+        msg = {"action": "cancel"}
+        if name:
+            msg["name"] = name
+        await _publish_timer(targets, msg)
+        _LOGGER.info("cancel_timer%s → %d dial(s)", f" '{name}'" if name else "", len(targets))
 
     async def _add_timer_time(call) -> None:
         """Add ``seconds`` to the dial's running timer (10 s to an hour)."""
@@ -1548,9 +1568,14 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 f"{TIMER_ADD_MAX_SECONDS} (got {raw_seconds!r})."
             )
         seconds = int(round(seconds_f))
+        name = strip_emoji_for_dial(str(call.data.get("name") or "")).strip()
         targets = _timer_targets(call, "add_timer_time")
-        await _publish_timer(targets, {"action": "add", "seconds": seconds})
-        _LOGGER.info("add_timer_time: +%ds → %d dial(s)", seconds, len(targets))
+        msg = {"action": "add", "seconds": seconds}
+        if name:
+            msg["name"] = name
+        await _publish_timer(targets, msg)
+        _LOGGER.info("add_timer_time: +%ds%s → %d dial(s)", seconds,
+                     f" '{name}'" if name else "", len(targets))
 
     async def _apply_overlay(call) -> None:
         """Apply a transient runtime overlay to a dial or room.
