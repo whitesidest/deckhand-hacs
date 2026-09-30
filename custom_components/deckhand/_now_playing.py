@@ -129,6 +129,74 @@ def now_playing_sources(attr: dict) -> list[str]:
     return out
 
 
+def upstream_source_entity(attr: dict) -> str:
+    """The entity a zone's current ``source`` names, or "".
+
+    A matrix amp exposes two tiers of ``media_player``. The ZONE a dial is
+    bound to has a ``source_list`` of upstream feeds — on an AmpliPi that is
+    literally ``["Source 1", ..., "Source 4"]`` — and its ``source`` says
+    which one it is listening to. Each of those feeds is ITSELF a
+    media_player whose OWN ``source_list`` is the list a person actually
+    wants: internet radio stations, Pandora channels, the physical inputs.
+
+    So the zone's ``source`` is a pointer, and this resolves it by the
+    convention HA already uses for entity ids (slugified name). Nothing
+    AmpliPi-specific: it is "the zone names its upstream feed, and if an
+    entity by that name exists we can offer its inputs too". The caller MUST
+    verify the entity exists before trusting it — see
+    :func:`now_playing_input_tier`.
+
+    Mirrors ``upstream_source_entity`` in Helm and Console; the three
+    publishers of ``cmd/now_playing`` cannot import each other, so they are
+    kept in lockstep by hand (helm#613).
+    """
+    src = str(attr.get("source") or "").strip()
+    if not src or src.lower() in {"none", "unknown", "unavailable", ""}:
+        return ""
+    slug = re.sub(r"[^a-z0-9]+", "_", src.lower()).strip("_")
+    return f"media_player.{slug}" if slug else ""
+
+
+def now_playing_input_tier(attr: dict, get_attrs) -> dict:
+    """The swipe-DOWN half of a ``cmd/now_playing`` push.
+
+    ``now_playing_controls`` describes the bound entity. This describes the
+    entity that entity is *fed by*, so the dial can offer both tiers: swipe
+    up retargets the zone ("which stream plays here"), swipe down retunes the
+    stream ("what that stream is playing").
+
+    ``get_attrs`` is a callable ``entity_id -> attribute dict | None`` — the
+    caller's own state accessor, because this module deliberately touches no
+    hass object. Returns ``{}`` whenever anything is missing, which is the
+    normal case for an ordinary speaker: the keys are only-true, so an absent
+    ``can_select_input`` leaves swipe-down unbound on the dial.
+
+    The dial publishes ``select_source`` against ``input_entity_id``, NOT the
+    bound zone — telling a zone to select "Pandora Appalachian" is a call the
+    amp refuses.
+    """
+    eid = upstream_source_entity(attr)
+    if not eid:
+        return {}
+    try:
+        up = get_attrs(eid)
+    except Exception:  # noqa: BLE001 — a state lookup must never break a push
+        return {}
+    if not up:
+        return {}
+    inputs = now_playing_sources(up)
+    # Same rule as the zone picker: the verb alone is not enough, there has
+    # to be something to pick, or the dial would open an empty list.
+    if not inputs or not now_playing_capabilities(up).get("can_select_source"):
+        return {}
+    return {
+        "can_select_input": True,
+        "input_sources": inputs,
+        "input_count": len(inputs),
+        "input_entity_id": eid,
+    }
+
+
 def now_playing_is_cold(attr: dict) -> bool:
     """Is this player sitting with no track loaded at all? (helm#319)
 
