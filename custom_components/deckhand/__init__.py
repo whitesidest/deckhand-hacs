@@ -72,7 +72,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import publish_image_to_dial
 from ._media_control import media_service_for_dial_event
-from ._now_playing import now_playing_controls, now_playing_fields
+from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
 from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
 
 
@@ -871,6 +871,18 @@ def _extract_now_playing(
     # second gate: SELECT_SOURCE with an empty source_list would otherwise
     # draw an empty picker.
     payload.update(now_playing_controls(attr))
+    # The SECOND source tier, for the dial's swipe-DOWN picker (firmware
+    # 0.4.158). The zone above only offers "which upstream feed plays here"
+    # — on a matrix amp that is just "Source 1..4". The stream behind it is
+    # where the internet radio stations and Pandora channels live, and until
+    # helm#613 a HACS-driven dial got no swipe-down at all while Helm- and
+    # Console-driven ones did. Yields {} for an ordinary speaker.
+    payload.update(
+        now_playing_input_tier(
+            attr,
+            lambda eid: (lambda st: st.attributes if st else None)(hass.states.get(eid)),
+        )
+    )
     return payload
 
 
