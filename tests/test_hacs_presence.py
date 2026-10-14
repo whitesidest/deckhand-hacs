@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.18.2"  # 1.18.2 = structured selectors: alarm/schedule "days" is a weekday multi-select, send_invitation on-accept gets flat on_* fields (raw on_accept still wins when set)
+    EXPECTED_VERSION = "1.19.0"  # 1.19.0 = press guard (drop duplicate/stale dial presses by press_id/queued_s), night-dim cap documented on apply_overlay, stream input tier (helm#613)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
