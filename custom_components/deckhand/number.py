@@ -87,6 +87,12 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
         subtitle flash or brightness bump is neither"). The firmware
         persists the value to NVS itself, so it survives a reboot.
 
+        Since the dial's night-dim cap (firmware newer than 0.4.169) a
+        ttl-less overlay brightness is a persistent CAP rather than a theme
+        brightness: the slider below the theme's level caps the dial there
+        through theme pushes, reconnects and reboots; at or above it (100
+        always) it lifts the cap. Older firmware keeps the behaviour below.
+
         Note this is THEME brightness — a 0-100% scale on the panel's
         normal level — not the operator's power profile
         (dim_brightness / full_brightness), which lives on Helm's Dial row
