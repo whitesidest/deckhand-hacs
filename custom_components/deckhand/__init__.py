@@ -72,6 +72,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import publish_image_to_dial
 from ._media_control import media_service_for_dial_event
+from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
 from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
 
@@ -539,6 +540,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     # Subscribe to events for automation triggers
     event_topic = f"deckhand/{team_id}/dial/+/event"
+    # Presses re-sent after an MQTT outage carry press_id: never act twice,
+    # never act on one more than a minute old (_press_guard).
+    press_guard = PressGuard()
 
     @callback
     def _handle_event(msg: mqtt.ReceiveMessage) -> None:
@@ -553,6 +557,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         if len(parts) >= 5:
             dial_id = parts[3]
         else:
+            return
+
+        verdict = press_guard.check(dial_id, payload)
+        if verdict != PRESS_ACCEPT:
+            _LOGGER.info(
+                "Dial %s press %s dropped (%s)",
+                dial_id, (payload.get("payload") or {}).get("press_id"), verdict,
+            )
             return
 
         # Fire as HA event for automations

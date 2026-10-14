@@ -859,7 +859,15 @@ apply_overlay:
         text:
     brightness:
       name: Brightness
-      description: Display brightness override (0-100).
+      description: >
+        Display brightness (0-100). Without ``ttl_s`` this sets the dial's
+        persistent brightness CAP (night dim; dial firmware newer than 0.4.169): the
+        dial never shows brighter than this — through theme changes, Wi-Fi
+        reconnects, reboots and other overlays' reverts — until it is lifted.
+        Sending a level at or above the current theme's brightness (100 always
+        works) lifts the cap. A cap-only overlay does not wake the screen.
+        With ``ttl_s`` it is a temporary brightness that reverts when the
+        timer ends, still under any cap.
       selector:
         number:
           min: 0
