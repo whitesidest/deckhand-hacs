@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.19.0"  # 1.19.0 = press guard (drop duplicate/stale dial presses by press_id/queued_s), night-dim cap documented on apply_overlay, stream input tier (helm#613)
+    EXPECTED_VERSION = "1.20.0"  # 1.20.0 = reconfigure an entry's team id in place (Helm -> Console cutover keeps devices), groups/list accepts string (UUID) room ids
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -193,8 +193,13 @@ class PresenceWiringTests(unittest.TestCase):
     def test_empty_clear_on_unload(self):
         unload_chunk = self.init_src.split("async def async_unload_entry", 1)[1]
         unload_chunk = unload_chunk.split("\nasync def ", 1)[0]
+        # The team comes from the store (what setup subscribed with) so a
+        # reconfigure, which rewrites entry.data before the reload, clears
+        # the OLD team's beacon — test_reconfigure_team_id pins that end to
+        # end.
+        self.assertIn('beacon_team_id = store.get("team_id")', unload_chunk)
         self.assertIn(
-            "TOPIC_HACS_PRESENCE.format(team_id=entry.data[CONF_TEAM_ID])",
+            "TOPIC_HACS_PRESENCE.format(team_id=beacon_team_id)",
             unload_chunk,
             "async_unload_entry no longer clears the presence beacon — a "
             "clean HACS shutdown would leave a stale retained 'present' up "

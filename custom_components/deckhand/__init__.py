@@ -237,8 +237,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # message arrives — the select entity falls back to
         # FALLBACK_THEMES so the picker is never blank.
         "themes": [],
-        # group_id (str of int) -> {id, slug, name, dial_ids: [...]} from
-        # the retained `deckhand/{team_id}/groups/list` topic. Used by
+        # group_id (str of int, or a Console UUID) -> {id, slug, name,
+        # dial_ids: [...]} from the retained
+        # `deckhand/{team_id}/groups/list` topic. Used by
         # the service handlers to fan a single Room device target out to
         # every member dial. Each entry is also registered as an HA
         # device with identifier (DOMAIN, f"group:{id}") so the existing
@@ -463,37 +464,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         if not store:
             return
 
-        # Same guardrails as themes — a hostile broker publisher
-        # shouldn't be able to balloon the device registry or inject
-        # control characters into device names.
-        MAX_GROUPS = 256
-        MAX_NAME_LEN = 128
-        MAX_DIALS_PER_GROUP = 256
+        normalized = _normalize_groups(groups)
 
-        normalized: dict[str, dict[str, Any]] = {}
-        for g in groups[:MAX_GROUPS]:
-            if not isinstance(g, dict):
-                continue
-            gid = g.get("id")
-            if not isinstance(gid, int):
-                continue
-            name = str(g.get("name") or f"Room {gid}")[:MAX_NAME_LEN]
-            slug = str(g.get("slug") or "")[:MAX_NAME_LEN]
-            raw_dials = g.get("dial_ids") or []
-            if not isinstance(raw_dials, list):
-                raw_dials = []
-            dial_ids = [
-                str(d)[:64]
-                for d in raw_dials[:MAX_DIALS_PER_GROUP]
-                if isinstance(d, str) and d.strip()
-            ]
-            normalized[str(gid)] = {
-                "id": gid,
-                "slug": slug,
-                "name": name,
-                "dial_ids": dial_ids,
-            }
-
+        # A reload (the Helm -> Console reconfigure) starts with an empty
+        # in-memory catalog, so prev_ids is empty and nothing is removed by
+        # the first message under the new prefix: room devices whose id is
+        # the same on both sides (legacy int ids) are simply refreshed. Rooms
+        # only the old server published are NOT removed — the previous list
+        # died with the reload. They resolve to no dials (a service call
+        # targeting one is refused as matching no dial) and can be deleted
+        # by hand.
         prev_ids = set(store["groups"].keys())
         store["groups"] = normalized
 
@@ -723,10 +703,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) ->
     # Helm/Console resume authority instantly (no waiting out the 90s TTL)
     # when HACS is removed/restarted cleanly. Same empty-retained convention
     # as sensor_watches. Best-effort: teardown must never raise on this.
+    #
+    # Clear it under the team this entry was SET UP with (the store), not
+    # entry.data: a reconfigure rewrites entry.data before the reload unloads
+    # us, and clearing the new team's topic would strand the old server's
+    # beacon retained.
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+    beacon_team_id = store.get("team_id") or entry.data[CONF_TEAM_ID]
     try:
         await mqtt.async_publish(
             hass,
-            TOPIC_HACS_PRESENCE.format(team_id=entry.data[CONF_TEAM_ID]),
+            TOPIC_HACS_PRESENCE.format(team_id=beacon_team_id),
             "",
             qos=1,
             retain=True,
@@ -755,6 +742,66 @@ async def _async_update_options(
 ) -> None:
     """Re-register media_player listeners when options change."""
     _reload_media_player_listeners(hass, entry)
+
+
+# Rooms catalog guardrails — a hostile broker publisher shouldn't be able
+# to balloon the device registry or inject control characters into device
+# names or identifiers.
+_MAX_GROUPS = 256
+_MAX_GROUP_NAME_LEN = 128
+_MAX_DIALS_PER_GROUP = 256
+_MAX_GROUP_ID_LEN = 64
+_GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _normalize_group_id(raw: Any) -> str | None:
+    """A room id from ``groups/list`` as its ``group:<id>`` suffix, or None.
+
+    Helm publishes integer ids. Deckhand Console publishes the legacy Helm
+    integer where a room has one (so existing ``group:<int>`` devices, and
+    the automations that target them, keep matching) and a UUID string for
+    rooms that never existed in Helm. An int maps to ``str(int)`` exactly as
+    before. ``bool`` is an ``int`` subclass and is refused: ``True`` used to
+    become a ``group:True`` device.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return str(raw)
+    if isinstance(raw, str):
+        gid = raw.strip()
+        if gid and len(gid) <= _MAX_GROUP_ID_LEN and _GROUP_ID_RE.match(gid):
+            return gid
+    return None
+
+
+def _normalize_groups(groups: list) -> dict[str, dict[str, Any]]:
+    """Validate a ``groups/list`` payload into ``{gid: group}``."""
+    normalized: dict[str, dict[str, Any]] = {}
+    for g in groups[:_MAX_GROUPS]:
+        if not isinstance(g, dict):
+            continue
+        gid = _normalize_group_id(g.get("id"))
+        if gid is None:
+            continue
+        name = str(g.get("name") or f"Room {gid}")[:_MAX_GROUP_NAME_LEN]
+        slug = str(g.get("slug") or "")[:_MAX_GROUP_NAME_LEN]
+        raw_dials = g.get("dial_ids") or []
+        if not isinstance(raw_dials, list):
+            raw_dials = []
+        dial_ids = [
+            str(d)[:64]
+            for d in raw_dials[:_MAX_DIALS_PER_GROUP]
+            if isinstance(d, str) and d.strip()
+        ]
+        normalized[gid] = {
+            # The int as published (bool was refused above), else the str.
+            "id": g["id"] if isinstance(g["id"], int) else gid,
+            "slug": slug,
+            "name": name,
+            "dial_ids": dial_ids,
+        }
+    return normalized
 
 
 @callback
