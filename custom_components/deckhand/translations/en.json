@@ -3,15 +3,31 @@
     "step": {
       "user": {
         "title": "Deckhand Smart Dial",
-        "description": "Enter your team ID to discover Deckhand dials via MQTT. You can find this in your Helm settings. Use '1' for local/Console setups.",
+        "description": "Enter your team ID to discover Deckhand dials via MQTT. Helm: the team id shown in Helm settings. Deckhand Console: `local`.",
         "data": {
           "team_id": "Team ID"
         }
+      },
+      "reconfigure": {
+        "title": "Change Deckhand team",
+        "description": "This entry currently listens on deckhand/{current_team_id}/…. Enter the team ID to move it to — for example `local` when the dials have moved from Helm to Deckhand Console. The entry, its dial and Room devices, and their entities are kept, so automations that target them keep working. Move every dial first: after saving, Home Assistant only hears dials on the new team.",
+        "data": {
+          "team_id": "Team ID"
+        },
+        "data_description": {
+          "team_id": "One MQTT topic level: letters, digits, '.', '_' or '-'. Helm uses its numeric team id; Deckhand Console uses `local`."
+        }
       }
+    },
+    "error": {
+      "invalid_team_id": "Enter a team ID of letters, digits, '.', '_' or '-' (no spaces, '/', '+' or '#').",
+      "team_id_in_use": "Another Deckhand entry already uses this team ID. Remove that entry first, or pick a different team."
     },
     "abort": {
       "already_configured": "Deckhand is already configured for this team.",
-      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first."
+      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first.",
+      "reconfigure_successful": "Team changed. The integration reloaded and now listens on the new team.",
+      "reconfigure_entry_missing": "The Deckhand entry to reconfigure no longer exists."
     }
   },
   "options": {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -38,6 +39,31 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
+# A team id is ONE MQTT topic level: ``deckhand/<team_id>/dial/...``. A
+# ``/`` would shift every level the handlers index by position, and ``+`` /
+# ``#`` are wildcards that would subscribe this entry to other teams.
+# Helm uses integer ids ("1"), Console the synthetic id "local".
+_TEAM_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _normalize_team_id(raw: Any) -> str | None:
+    """Return the stripped team id, or None when it can't be a topic level."""
+    if not isinstance(raw, str):
+        return None
+    team_id = raw.strip()
+    return team_id if _TEAM_ID_RE.match(team_id) else None
+
+
+def _entry_title(team_id: str) -> str:
+    """The config entry title convention: ``Deckhand (Team <id>)``."""
+    return f"Deckhand (Team {team_id})"
+
+
+def _unique_id(team_id: str) -> str:
+    """The config entry unique_id convention: one entry per team."""
+    return f"deckhand_{team_id}"
+
+
 class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Deckhand."""
 
@@ -50,20 +76,23 @@ class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            team_id = user_input[CONF_TEAM_ID].strip()
+            team_id = _normalize_team_id(user_input.get(CONF_TEAM_ID))
 
             # Check that MQTT is configured
             if not self.hass.config_entries.async_entries("mqtt"):
                 return self.async_abort(reason="mqtt_not_configured")
 
-            # Check if already configured for this team
-            await self.async_set_unique_id(f"deckhand_{team_id}")
-            self._abort_if_unique_id_configured()
+            if team_id is None:
+                errors[CONF_TEAM_ID] = "invalid_team_id"
+            else:
+                # Check if already configured for this team
+                await self.async_set_unique_id(_unique_id(team_id))
+                self._abort_if_unique_id_configured()
 
-            return self.async_create_entry(
-                title=f"Deckhand (Team {team_id})",
-                data={CONF_TEAM_ID: team_id},
-            )
+                return self.async_create_entry(
+                    title=_entry_title(team_id),
+                    data={CONF_TEAM_ID: team_id},
+                )
 
         return self.async_show_form(
             step_id="user",
@@ -123,6 +152,118 @@ class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
         )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change an existing entry's team id IN PLACE.
+
+        The Helm -> Console cutover moves a home from ``deckhand/1/...`` to
+        ``deckhand/local/...``. Deleting the entry and adding a new one would
+        recreate every dial and Room device with NEW HA device ids, breaking
+        every automation that targets them. Reconfigure keeps the entry_id,
+        so the devices (keyed by dial_id and ``group:<id>``, neither of which
+        contains the team id) and their entities survive untouched; the
+        reload re-subscribes everything under the new prefix.
+
+        Offered by HA 2024.4+ (three-dot menu on the entry -> Reconfigure).
+        Written against both the 2024.4 API and the 2024.11 helpers.
+        """
+        entry = self._deckhand_reconfigure_entry()
+        if entry is None:
+            return self.async_abort(reason="reconfigure_entry_missing")
+
+        current = str(entry.data.get(CONF_TEAM_ID, ""))
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            team_id = _normalize_team_id(user_input.get(CONF_TEAM_ID))
+            if team_id is None:
+                errors[CONF_TEAM_ID] = "invalid_team_id"
+            elif self._team_id_in_use(team_id, entry.entry_id):
+                errors[CONF_TEAM_ID] = "team_id_in_use"
+            else:
+                return self._apply_reconfigure(entry, team_id)
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_TEAM_ID, default=current): str}
+            ),
+            errors=errors,
+            description_placeholders={"current_team_id": current},
+        )
+
+    def _deckhand_reconfigure_entry(self) -> ConfigEntry | None:
+        """The entry being reconfigured, on any HA that offers the step."""
+        getter = getattr(self, "_get_reconfigure_entry", None)  # HA 2024.11+
+        if getter is not None:
+            try:
+                return getter()
+            except Exception:  # noqa: BLE001 - fall back to the context
+                _LOGGER.debug("_get_reconfigure_entry failed", exc_info=True)
+        entry_id = self.context.get("entry_id")
+        if not entry_id:
+            return None
+        return self.hass.config_entries.async_get_entry(entry_id)
+
+    def _team_id_in_use(self, team_id: str, own_entry_id: str) -> bool:
+        """True if ANOTHER Deckhand entry already serves this team."""
+        for other in self.hass.config_entries.async_entries(DOMAIN):
+            if other.entry_id == own_entry_id:
+                continue
+            if (
+                str(other.data.get(CONF_TEAM_ID, "")) == team_id
+                or other.unique_id == _unique_id(team_id)
+            ):
+                return True
+        return False
+
+    def _apply_reconfigure(
+        self, entry: ConfigEntry, team_id: str
+    ) -> ConfigFlowResult:
+        """Rewrite team_id, title and unique_id in place, then reload.
+
+        ``async_update_entry`` with ``unique_id=`` is the one call that is
+        stable across every HA version that offers reconfigure, so the entry
+        is rewritten here and the reload/abort helper is called with no
+        changes of its own (its keyword set differs between 2024.4 and
+        2024.11; ``reason`` and the entry are common to both).
+        """
+        new_unique_id = _unique_id(team_id)
+        self.hass.config_entries.async_update_entry(
+            entry,
+            title=_entry_title(team_id),
+            data={**entry.data, CONF_TEAM_ID: team_id},
+            unique_id=new_unique_id,
+        )
+        self._abort_pending_discovery(new_unique_id)
+
+        reload_and_abort = getattr(self, "async_update_reload_and_abort", None)
+        if reload_and_abort is not None:
+            return reload_and_abort(entry, reason="reconfigure_successful")
+        self.hass.async_create_task(
+            self.hass.config_entries.async_reload(entry.entry_id)
+        )
+        return self.async_abort(reason="reconfigure_successful")
+
+    def _abort_pending_discovery(self, unique_id: str) -> None:
+        """Drop a "Discovered" card for the team this entry now serves.
+
+        The manifest's MQTT discovery sees the new prefix's dials before the
+        cutover and offers them as a new integration. Once this entry owns
+        that team the card is a trap: accepting it would fail, and it would
+        sit in the UI until restart. Best effort only.
+        """
+        try:
+            flow_manager = self.hass.config_entries.flow
+            for flow in flow_manager.async_progress_by_handler(DOMAIN):
+                if flow.get("flow_id") == self.flow_id:
+                    continue
+                if (flow.get("context") or {}).get("unique_id") == unique_id:
+                    flow_manager.async_abort(flow["flow_id"])
+        except Exception:  # noqa: BLE001 - never fail the reconfigure on this
+            _LOGGER.debug("could not abort pending discovery flows", exc_info=True)
 
     @staticmethod
     @callback

@@ -47,6 +47,31 @@ Copy the `custom_components/deckhand/` folder into your HA `config/custom_compon
      onto the team-prefixed topics.
 4. Dials are auto-discovered as they publish heartbeats via MQTT
 
+### Changing the team (moving from Helm to Console)
+
+An existing entry can be pointed at a different team **in place** — use this
+when a home moves from Helm (`deckhand/<team>/...`) to Deckhand Console
+(`deckhand/local/...`). Do not delete and re-add the entry: that would give
+every dial and Room a new Home Assistant device id and break the automations
+that target them.
+
+1. Move every dial to the new server first. After the change, Home Assistant
+   only hears dials on the new team.
+2. **Settings** > **Devices & services** > **Deckhand Smart Dial** > the
+   three-dot menu on the entry > **Reconfigure** (Home Assistant 2024.4+).
+3. Change **Team ID** (e.g. `1` → `local`) and submit.
+
+The entry keeps its id, its dial devices (keyed by dial id) and Room devices
+(keyed by `group:<room id>`), their entities and their device ids; the title
+becomes `Deckhand (Team <id>)`. The integration reloads and re-subscribes
+every topic under the new prefix, and clears its presence beacon on the old
+one. A team already used by another Deckhand entry is refused.
+
+Rooms the old server published but the new one does not are not removed
+automatically (the previous room list is not kept across the reload). They
+resolve to no dials; delete them from the device page if you no longer need
+them.
+
 ## Entities
 
 Each Deckhand dial creates the following entities:
