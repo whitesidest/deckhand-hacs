@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.20.0"  # 1.20.0 = reconfigure an entry's team id in place (Helm -> Console cutover keeps devices), groups/list accepts string (UUID) room ids
+    EXPECTED_VERSION = "1.21.0"  # 1.21.0 = the Perimeter Ring as a layer: bounce + retired-treatment fold, even layout, theme_colors / hide_when_calm, 64-char ids, live feed, clear_perimeter_ring
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

@@ -507,34 +507,52 @@ automation:
 ## Perimeter Ring
 
 The Perimeter Ring is a thin ring of up to 16 state segments around the rim
-of the display — door open, washer done, grid exporting. It is an overlay:
-it composites over whatever face the dial is showing (clock, sensor,
-charge…) and never takes over the screen. Mount it with
-`deckhand.mount_perimeter_ring` (retained — survives reboots), drive it from
-your automations with `deckhand.update_perimeter_state`, and take it down
-with `deckhand.unmount_face` (`face_id: perimeter_ring`).
+of the display — door open, leak detected, grid exporting. It is a LAYER,
+not a face: it composites over whatever face the dial is showing (clock,
+sensor, charge, now playing…) and never takes over the screen. Mount it
+with `deckhand.mount_perimeter_ring` (retained — survives reboots) and take
+it down with `deckhand.clear_perimeter_ring`.
 
 ```yaml
 service: deckhand.mount_perimeter_ring
 data:
   device_id: <ha_device_id>
+  hide_when_calm: true      # slide off the rim while everything is calm
+  theme_colors: false       # true = calm/alert colours follow the dial's theme
   bindings:
-    - id: front_door
+    - id: binary_sensor.front_door        # the entity_id, at most 64 chars
       friendly_name: Front Door
-      angular_center: 0
-      angular_width: 24
+      treatment: bounce                   # state_color | flash | bounce
+      active_state: "on"                  # default "on"
+    - id: lock.back_door
       active_state: unlocked
-      base_color: "#68C8D8"
-      active_color: "#E89858"
+    - id: sensor.grid_power
+      numeric_threshold: 0.1              # > 0.1 → above_state, else below_state
+      above_state: exporting
+      below_state: importing
+      active_state: exporting
 ```
+
+Leave `angular_center` out and the segments are spread evenly around the
+rim; arcs that would overlap are re-spaced evenly.
+
+**Live by default.** Every binding whose `id` is an entity in this Home
+Assistant is fed by the integration: a state change reaches the dial within
+a second, and every fed ring is re-sent each minute so a rebooted dial
+catches up. HA's `on`/`off` are folded to the binding's `active_state`
+(`open`, `unlocked`, `detected`, … are synonyms) and `numeric_threshold` is
+applied — the same rules Helm's and Console's pollers use, so a ring
+published from Helm or Console (Faces editor, integration API, MCP) is fed
+the same way. Pass `live_state: false` to drive a ring only from your own
+automations:
 
 ```yaml
 service: deckhand.update_perimeter_state
 data:
   device_id: <ha_device_id>
   states:
-    - id: front_door
-      state: "{{ states('lock.front_door') }}"
+    - id: sensor.grid_power
+      state: "{{ 'exporting' if states('sensor.grid_power')|float(0) > 0 else 'importing' }}"
 ```
 
 The full-screen **Perimeter Pulse** face is retired in favour of the ring.

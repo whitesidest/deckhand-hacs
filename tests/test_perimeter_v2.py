@@ -74,15 +74,11 @@ class ThresholdBindingShapingTests(unittest.TestCase):
             if isinstance(n, ast.FunctionDef) and n.name in wanted
         ]
         assert {f.name for f in fns} == wanted, "shaper functions not found"
-        ns: dict = {
-            "Any": Any,
-            "_LOGGER": logging.getLogger("test"),
-            "PERIMETER_TREATMENTS": (
-                "state_color", "ripple", "gradient", "flash", "sweep",
-            ),
-            # 1.17.1 — the shaper humanises a missing friendly_name.
-            "humanize_entity_id": lambda bid: bid,
-        }
+        from perimeter_shaper_ns import shaper_namespace
+
+        # The real const.py / _perimeter.py globals (treatments, aliases,
+        # id cap, default active_state), never a hand-copied tuple.
+        ns: dict = shaper_namespace()
         exec(
             compile(ast.Module(body=fns, type_ignores=[]), INIT_PY.name, "exec"),
             ns,
@@ -198,15 +194,17 @@ class ServicesSteeringTests(unittest.TestCase):
         self.assertIn("Helm", desc)
         self.assertIn("template", desc)
 
-    def test_threshold_keys_marked_helm_feeder_only(self):
+    def test_threshold_keys_say_who_compares(self):
+        # Was "honored by Helm's feeder ONLY". Since the integration feeds
+        # rings itself (_perimeter.binding_state), the comparison happens on
+        # both paths and the dial still only string-matches.
         combined = (
             self.mount["description"]
             + self.mount["fields"]["bindings"]["description"]
         )
-        self.assertRegex(
-            combined, r"(?i)helm'?s feeder\s+only",
-            "docs must say the threshold keys are honored by Helm's feeder only",
-        )
+        self.assertIn("live feed", combined)
+        self.assertIn("Helm's poller", combined)
+        self.assertIn("only string-matches", combined)
 
     def test_grid_energy_example_present(self):
         example = self.mount["fields"]["bindings"]["example"]

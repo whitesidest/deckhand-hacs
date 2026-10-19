@@ -36,11 +36,16 @@ from .const import (
     FACE_ID_ALIASES,
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
+    PERIMETER_DEFAULT_ACTIVE_STATE,
     PERIMETER_FACE_ID,
+    PERIMETER_ID_MAX,
+    PERIMETER_LIVE_STATE_KEY,
     PERIMETER_MAX_BINDINGS,
+    PERIMETER_REFRESH_S,
     PERIMETER_RETIRED_FACE_ID,
     PERIMETER_STATE_DEFAULT_LAYER,
     PERIMETER_STATE_LAYERS,
+    PERIMETER_TREATMENT_ALIASES,
     PERIMETER_TREATMENTS,
     PLATFORMS,
     TOPIC_CMD_ANNOUNCE,
@@ -62,6 +67,7 @@ from .const import (
     TOPIC_CMD_TIMER,
     TOPIC_CMD_SUNSET,
     TOPIC_HACS_PRESENCE,
+    TOPIC_PERIMETER_MOUNTS,
     TOPIC_SENSOR_WATCHES,
     TOPIC_STATUS,
     TOPIC_THEME_REQUEST,
@@ -75,6 +81,12 @@ from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
 from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
+from ._perimeter import (
+    fed_bindings as perimeter_fed_bindings,
+    layout_bindings as perimeter_layout_bindings,
+    normalize_treatment as perimeter_normalize_treatment,
+    state_updates as perimeter_state_updates,
+)
 
 
 def _dispatch_dial_media_control(hass: HomeAssistant, envelope: dict) -> None:
@@ -260,6 +272,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # watching, and an overlay unbind doesn't tear down the
         # persistent face listeners.
         "_sensor_watch_bindings": {},
+        # dial_id -> {"team_id", "bindings", "unsub"}: the live feed for
+        # each dial's Perimeter Ring layer, armed from its retained mount
+        # (_set_perimeter_feed).
+        "_perimeter_feeds": {},
     }
 
     # The dial GETs album art from us (baseline JPEG, dial-sized) rather
@@ -659,6 +675,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         await mqtt.async_subscribe(hass, sensor_watches_topic, _handle_sensor_watches, qos=0)
     )
 
+    # Follow every retained Perimeter Ring mount on the team — whether
+    # this integration, Helm or Console published it — and feed the ring
+    # its bound entities' live states (_set_perimeter_feed). Retained, so
+    # the feed re-arms by itself after a Home Assistant restart; the empty
+    # retained clear that takes a ring down stands the feed down too.
+    perimeter_topic = TOPIC_PERIMETER_MOUNTS.format(team_id=team_id)
+
+    @callback
+    def _handle_perimeter_mount(msg: mqtt.ReceiveMessage) -> None:
+        parts = msg.topic.split("/")
+        if len(parts) < 5:
+            return
+        dial_id = parts[3]
+        bindings: list[dict[str, Any]] = []
+        if msg.payload:
+            try:
+                payload = json.loads(msg.payload)
+            except (json.JSONDecodeError, ValueError):
+                _LOGGER.warning("Invalid JSON on %s", msg.topic)
+                return
+            bindings = perimeter_fed_bindings(payload, PERIMETER_LIVE_STATE_KEY)
+        _set_perimeter_feed(hass, entry, dial_id, team_id, bindings)
+
+    entry.async_on_unload(
+        await mqtt.async_subscribe(hass, perimeter_topic, _handle_perimeter_mount, qos=0)
+    )
+
+    async def _refresh_perimeter_feeds(_now: datetime | None = None) -> None:
+        store = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+        for dial_id, feed in list(store.get("_perimeter_feeds", {}).items()):
+            await _push_perimeter_state(hass, feed["team_id"], dial_id, feed["bindings"])
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _refresh_perimeter_feeds, timedelta(seconds=PERIMETER_REFRESH_S)
+        )
+    )
+
     # Set up entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -732,6 +786,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) ->
                 unsub()
         for binding in (store or {}).get("_sensor_watch_bindings", {}).values():
             unsub = binding.get("unsub")
+            if unsub:
+                unsub()
+        for feed in (store or {}).get("_perimeter_feeds", {}).values():
+            unsub = feed.get("unsub")
             if unsub:
                 unsub()
     return unload_ok
@@ -1129,6 +1187,90 @@ def _set_sensor_watch_listeners(
     _LOGGER.info(
         "sensor_watches: armed %d listener(s) for %s (entities=%s)",
         len(watched), dial_id, ", ".join(watched),
+    )
+
+
+def _perimeter_state_of(hass: HomeAssistant):
+    """``entity_id -> raw HA state`` (None when HA has no such entity)."""
+
+    def _state_of(entity_id: str) -> str | None:
+        st = hass.states.get(entity_id)
+        return None if st is None else st.state
+
+    return _state_of
+
+
+async def _push_perimeter_state(
+    hass: HomeAssistant,
+    team_id: str,
+    dial_id: str,
+    bindings: list[dict[str, Any]],
+    only: set[str] | None = None,
+) -> None:
+    """Publish the bound entities' current states to the dial's ring.
+
+    ``cmd/face/perimeter_ring/state`` with ``{"bindings": [{id, state}]}``
+    — the firmware's canonical state shape, the same one Helm's and
+    Console's pollers send. Not retained (the topic never is). ``only``
+    narrows the push to the entities that just changed.
+    """
+    if only is not None:
+        bindings = [b for b in bindings if b.get("id") in only]
+    updates = perimeter_state_updates(bindings, _perimeter_state_of(hass))
+    if not updates:
+        return
+    topic = TOPIC_CMD_FACE_STATE.format(
+        team_id=team_id, dial_id=dial_id, face_id=PERIMETER_FACE_ID,
+    )
+    await mqtt.async_publish(hass, topic, json.dumps({"bindings": updates}), retain=False)
+
+
+def _set_perimeter_feed(
+    hass: HomeAssistant,
+    entry: DeckhandConfigEntry,
+    dial_id: str,
+    team_id: str,
+    bindings: list[dict[str, Any]],
+) -> None:
+    """Reconcile the live feed for one dial's Perimeter Ring layer with its
+    latest retained mount.
+
+    Idempotent: the previous listener for the dial is always replaced, and
+    no bindings (ring cleared, or mounted with live_state off) leaves none.
+    Every binding id that names an entity (``domain.object``) is watched —
+    including one HA has not loaded yet at start-up, so it is fed the
+    moment it appears. A state change pushes that binding; arming pushes
+    them all, so the ring shows real states straight after a mount.
+    """
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if store is None:
+        return
+    feeds: dict[str, Any] = store.setdefault("_perimeter_feeds", {})
+    prev = feeds.pop(dial_id, None)
+    if prev:
+        prev["unsub"]()
+
+    bindings = [b for b in bindings if "." in b.get("id", "")]
+    if not bindings:
+        if prev:
+            _LOGGER.info("perimeter feed: stood down for %s", dial_id)
+        return
+    watched = list(dict.fromkeys(b["id"] for b in bindings))
+
+    @callback
+    def _on_change(event: Event) -> None:
+        eid = event.data.get("entity_id")
+        if eid not in watched:
+            return
+        hass.async_create_task(
+            _push_perimeter_state(hass, team_id, dial_id, bindings, only={eid})
+        )
+
+    unsub = async_track_state_change_event(hass, watched, _on_change)
+    feeds[dial_id] = {"team_id": team_id, "bindings": bindings, "unsub": unsub}
+    hass.async_create_task(_push_perimeter_state(hass, team_id, dial_id, bindings))
+    _LOGGER.info(
+        "perimeter feed: armed %d binding(s) for %s", len(watched), dial_id,
     )
 
 
@@ -2329,27 +2471,50 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         bid = raw.get("id")
         if not isinstance(bid, str) or not bid.strip():
             return None
+        bid = bid.strip()
+        if len(bid) > PERIMETER_ID_MAX:
+            # The id is the dial's state-match key in a 64-byte buffer: a
+            # longer one is cut at mount and never matches a state update.
+            # Refused rather than truncated, like Helm and Console.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="binding_id_too_long",
+                translation_placeholders={"id": bid, "max": str(PERIMETER_ID_MAX)},
+            )
         out: dict[str, Any] = {
-            "id": bid.strip(),
+            "id": bid,
             # Painted on the ring's attention line and hover narration —
             # a humanised id, never the raw one, when the caller gave none.
             "friendly_name": str(raw.get("friendly_name") or "").strip() or humanize_entity_id(bid),
-            "angular_center": float(raw.get("angular_center", 0.0)),
         }
-        if "angular_width" in raw:
+        # Left unset when the caller gave none: _mount_perimeter_ring spreads
+        # those evenly once it knows how many bindings there are. Defaulting
+        # every one to 0 stacked all the arcs at 12 o'clock.
+        if raw.get("angular_center") is not None:
+            out["angular_center"] = float(raw["angular_center"])
+        if raw.get("angular_width") is not None:
             out["angular_width"] = float(raw["angular_width"])
-        treatment = raw.get("treatment", "state_color")
-        if treatment not in PERIMETER_TREATMENTS:
+        given = raw.get("treatment")
+        treatment = perimeter_normalize_treatment(
+            given, PERIMETER_TREATMENTS, PERIMETER_TREATMENT_ALIASES
+        )
+        if treatment is None:
             _LOGGER.warning(
                 "perimeter binding %s: unknown treatment '%s', using state_color",
-                bid, treatment,
+                bid, given,
             )
             treatment = "state_color"
         out["treatment"] = treatment
-        if "state" in raw:
+        if raw.get("state") is not None:
             out["state"] = str(raw["state"])
-        if "active_state" in raw:
-            out["active_state"] = str(raw["active_state"])
+        # An empty active_state never activates on the dial (exact match),
+        # so a binding without one would never light up. HA says "on".
+        active_state = raw.get("active_state")
+        out["active_state"] = (
+            str(active_state).strip()
+            if active_state is not None and str(active_state).strip()
+            else PERIMETER_DEFAULT_ACTIVE_STATE
+        )
         bc = _normalise_color(raw.get("base_color"))
         ac = _normalise_color(raw.get("active_color"))
         if bc:
@@ -2370,14 +2535,12 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             except (TypeError, ValueError):
                 pass
         # Numeric-threshold keys (grid energy, tank level, …). The
-        # firmware ignores these at mount — they are honored by Helm's
-        # ``poll_perimeter_faces`` feeder ONLY (i.e. faces published
-        # through Helm, where float(entity state) > numeric_threshold
-        # pushes above_state / below_state). They pass through here so
-        # a ring config round-trips intact between the HACS and Helm
-        # paths; under the self-driven HACS path, compute the state
-        # string with an HA template and send it via
-        # ``update_perimeter_state`` instead.
+        # firmware ignores these at mount — they are read by the feeders:
+        # this integration's own live feed (_perimeter.binding_state) and
+        # Helm's ``poll_perimeter_faces``, where float(entity state) >
+        # numeric_threshold pushes above_state / below_state. They pass
+        # through so a ring config round-trips intact between the HACS
+        # and Helm paths.
         if raw.get("numeric_threshold") is not None:
             try:
                 out["numeric_threshold"] = float(raw["numeric_threshold"])
@@ -2442,23 +2605,20 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         Pulse face, which is retired: same payload, so the legacy service
         name simply lands on ``cmd/face/perimeter_ring/mount`` now.
 
-        Two ways to run a perimeter ring — pick one:
+        The ring is a LAYER: the mount never touches the hero face, and
+        ``clear_perimeter_ring`` takes it down again.
 
-        * **HACS-mounted (this service): self-driven.** The ring is
-          static until YOUR automations push updates via
-          ``update_perimeter_state`` — event-driven, LAN-local, no Helm
-          dependency. For numeric sensors, an HA template can compute
-          the state string directly (e.g. ``{{ 'exporting' if
-          states('sensor.grid_power')|float > 0 else 'importing' }}``);
-          the ``numeric_threshold`` / ``above_state`` / ``below_state``
-          binding keys are honored by Helm's feeder only and merely
-          pass through here.
-        * **Helm-published (Face publish endpoint / Faces editor):
-          persistent + fed.** Helm persists the Face, points
-          ``Dial.current_face`` at it, and ``poll_perimeter_faces``
-          polls the bound HA entities every ~10s — including the
-          numeric-threshold comparison. Use that path when you want the
-          ring to live without any HA automations.
+        Live state: every binding whose ``id`` is an entity in this Home
+        Assistant is fed by the integration itself (``_set_perimeter_feed``,
+        armed from the retained mount): its state goes to the dial within a
+        second of changing, folded to the binding's ``active_state``
+        (on≡open, off≡closed, …) and through ``numeric_threshold`` exactly
+        as Helm's and Console's pollers do. Pass ``live_state: false`` to
+        drive the ring only from your own automations with
+        ``update_perimeter_state`` (custom state strings). A ring published
+        through Helm or Console (Faces editor, integration API face/mount or
+        face/publish) is fed by their pollers and, when it reaches this
+        Home Assistant's broker, by this integration too.
         """
         await _require_admin(call)
         device_id = call.data.get("device_id")
@@ -2504,13 +2664,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 "subtitle_text instead",
             )
 
+        contiguous = bool(call.data.get("contiguous") or False)
+        perimeter_layout_bindings(bindings, contiguous)
         payload: dict[str, Any] = {
             "face_id": PERIMETER_FACE_ID,
             "schema_version": 1,
             "bindings": bindings,
         }
         if call.data.get("contiguous") is not None:
-            payload["contiguous"] = bool(call.data["contiguous"])
+            payload["contiguous"] = contiguous
+        # The two layer-level switches (firmware 0.4.158 / 0.4.161; older
+        # firmware ignores them): follow the dial's theme colours, and slide
+        # the ring off the rim while every binding is calm.
+        for key in ("theme_colors", "hide_when_calm"):
+            if call.data.get(key) is not None:
+                payload[key] = bool(call.data[key])
+        # live_state (default on): this integration feeds the ring from the
+        # bound entities itself (see _set_perimeter_feed). Off = the caller's
+        # own automations drive it with update_perimeter_state.
+        if call.data.get("live_state") is False:
+            payload[PERIMETER_LIVE_STATE_KEY] = False
         if call.data.get("bar_thickness") not in (None, ""):
             try:
                 payload["bar_thickness"] = min(
@@ -2617,6 +2790,29 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             "update_perimeter_state: %d update(s) → %d dial(s) (%s)",
             len(clean_states), len(targets), face_id,
         )
+
+    async def _clear_perimeter_ring(call) -> None:
+        """Take the Perimeter Ring layer off the dial and keep it off.
+
+        The layer counterpart of mount_perimeter_ring: the hero face is
+        left exactly as it is. Publishes ``cmd/face/perimeter_ring/unmount``
+        plus an empty retained clear of its mount (so a reconnect cannot
+        replay it), and sweeps the retired ``perimeter_pulse`` topics the
+        same way. The retained clear also stands down this integration's
+        live feed for the dial. Same wire as ``unmount_face`` with
+        ``face_id: perimeter_ring``, and as the integration API's
+        ``face/unmount`` that Helm, Console and the MCP clear_perimeter use.
+        """
+        await _require_admin(call)
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        await _retire_pulse_mount(targets)
+        await _publish_face_unmount(PERIMETER_FACE_ID, targets)
+        _LOGGER.info("clear_perimeter_ring: %d dial(s)", len(targets))
 
     async def _mount_face(call) -> None:
         """Generic mount — escape hatch for forward-compat with new faces."""
@@ -3366,6 +3562,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
     if not hass.services.has_service(DOMAIN, "update_perimeter_state"):
         hass.services.async_register(
             DOMAIN, "update_perimeter_state", _update_perimeter_state
+        )
+    if not hass.services.has_service(DOMAIN, "clear_perimeter_ring"):
+        hass.services.async_register(
+            DOMAIN, "clear_perimeter_ring", _clear_perimeter_ring
         )
     if not hass.services.has_service(DOMAIN, "mount_face"):
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)

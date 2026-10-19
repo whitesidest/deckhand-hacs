@@ -1155,15 +1155,11 @@ class PerimeterBindingShapingTests(unittest.TestCase):
         _spec = importlib.util.spec_from_file_location("dial_text", INIT_PY.parent / "dial_text.py")
         _dial_text = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_dial_text)
-        ns: dict = {
-            "Any": Any,
-            "_LOGGER": logging.getLogger("test"),
-            "PERIMETER_TREATMENTS": (
-                "state_color", "ripple", "gradient", "flash", "sweep",
-            ),
-            # 1.17.1 — friendly_name falls back to a humanised id.
-            "humanize_entity_id": _dial_text.humanize_entity_id,
-        }
+        from perimeter_shaper_ns import shaper_namespace
+
+        # The real const.py / _perimeter.py globals (treatments, aliases,
+        # id cap, default active_state), never a hand-copied tuple.
+        ns: dict = shaper_namespace()
         exec(
             compile(ast.Module(body=fns, type_ignores=[]), INIT_PY.name, "exec"),
             ns,
@@ -1183,7 +1179,11 @@ class PerimeterBindingShapingTests(unittest.TestCase):
         self.assertEqual(out["treatment"], "state_color")
         # angular_width omitted -> firmware default (24) applies on-dial.
         self.assertNotIn("angular_width", out)
-        self.assertNotIn("active_state", out)  # firmware defaults "open"
+        # The firmware never activates an empty active_state (exact match),
+        # so a binding left without one used to never light up. HA says "on".
+        self.assertEqual(out["active_state"], "on")
+        # Left out so the mount handler can spread the bindings evenly.
+        self.assertNotIn("angular_center", out)
 
     def test_unknown_treatment_falls_back(self):
         out = self.build({"id": "x", "treatment": "disco"})
