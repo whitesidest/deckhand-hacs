@@ -76,6 +76,9 @@
     "invalid_bindings": {
       "message": "Provide a non-empty bindings array. Each binding needs at least an id."
     },
+    "binding_id_too_long": {
+      "message": "Binding id \"{id}\" is longer than {max} characters. The dial matches live state by the whole id, so a longer one would never update."
+    },
     "invalid_states": {
       "message": "Provide a non-empty states array. Each entry needs an id and at least one of state/value/event."
     },

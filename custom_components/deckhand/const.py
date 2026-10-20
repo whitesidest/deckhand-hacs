@@ -130,10 +130,33 @@ TOPIC_THEME_REQUEST = "deckhand/{team_id}/dial/{dial_id}/theme_request"
 # TOPIC_THEME_REQUEST instead of the direct cmd/theme publish.
 SERVER_RESOLVED_THEMES = ("random",)
 
-# Perimeter Ring treatment names recognised by the firmware. Kept here so
-# the HACS service schema can validate without the user having to re-read
-# the firmware source.
-PERIMETER_TREATMENTS = ("state_color", "ripple", "gradient", "flash", "sweep")
+# Perimeter Ring treatments the firmware draws (perimeter_logic.h
+# pp_parse_treatment): solid, blink, bounce. Trimmed 2026-09-25 to what reads
+# on a thin arc; Helm and Console validate exactly these three. This tuple
+# used to hold the legacy five, so ``bounce`` was downgraded to state_color
+# and the retired names went out as-is.
+PERIMETER_TREATMENTS = ("state_color", "flash", "bounce")
+# Retired treatment names → their survivor, the same fold Helm's and
+# Console's PerimeterBinding validators apply, so an automation written for
+# the old vocabulary keeps working and the wire only carries the three.
+PERIMETER_TREATMENT_ALIASES = {
+    "ripple": "flash",
+    "sweep": "flash",
+    "blink": "flash",
+    "gradient": "state_color",
+}
+# A binding ``id`` is the firmware's state-match key (strcmp in pr_on_state)
+# and lives in a 64-byte buffer (PrBinding.id). An id longer than that is
+# truncated at mount and then never matches a state update, so the segment
+# freezes silently. Helm and Console refuse it (max_length=64); so do we.
+PERIMETER_ID_MAX = 64
+# The firmware's state / active_state buffers (16 bytes).
+PERIMETER_STATE_MAX = 16
+# Every binding is activated by an EXACT ``state == active_state`` match on
+# the dial, and an empty active_state never matches. Home Assistant reports
+# open doors, wet leak sensors and tripped motion as "on", so that is the
+# default here (the backends' pollers fold open/on, closed/off, … together).
+PERIMETER_DEFAULT_ACTIVE_STATE = "on"
 # Firmware renders at most this many bindings (PR_MAX_BINDINGS in
 # face_perimeter_ring.h) — extras are silently dropped on-dial, so the
 # integration truncates with a warning instead.
@@ -156,6 +179,18 @@ FACE_ID_ALIASES = {PERIMETER_RETIRED_FACE_ID: PERIMETER_FACE_ID}
 # perimeter_ring.
 PERIMETER_STATE_LAYERS = {"pulse": PERIMETER_FACE_ID, "ring": PERIMETER_FACE_ID}
 PERIMETER_STATE_DEFAULT_LAYER = "ring"
+# Ring-mount key, HACS-only, that switches the integration's own live feed
+# off for that ring (see _perimeter.py). Only written when false; the
+# firmware ignores unknown keys.
+PERIMETER_LIVE_STATE_KEY = "hacs_live_state"
+# Re-send every fed ring's state this often. The state topic is not
+# retained, so a dial that rebooted (its retained mount replays with no
+# states) would otherwise wait for the next entity change. Helm uses the
+# same 60 s (_PERIMETER_REFRESH_S).
+PERIMETER_REFRESH_S = 60
+# Retained ring mounts for every dial on the team, whoever published them
+# (Helm, Console, this integration). HACS follows them to feed the ring.
+TOPIC_PERIMETER_MOUNTS = "deckhand/{team_id}/dial/+/cmd/face/perimeter_ring/mount"
 
 # ── Doorbell / snapshot image push (cmd/image) ──────────────────────
 # Default dial resolution for image backdrops pushed from HACS. HACS
