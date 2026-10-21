@@ -35,7 +35,7 @@ import unittest
 import yaml
 
 from perimeter_shaper_ns import const, perimeter
-from test_emoji_strip_every_service import MOD, TARGETS, _SVE, _ServiceTest, _state
+from test_emoji_strip_every_service import MOD, STAMP, TARGETS, _SVE, _ServiceTest, _state
 from test_service_schema import SERVICES_YAML
 
 RING_MOUNT = "/cmd/face/perimeter_ring/mount"
@@ -194,7 +194,7 @@ class ClearTheLayer(_ServiceTest):
         sent = self.call("clear_perimeter_ring")
         for suffix in (RING_UNMOUNT, PULSE_UNMOUNT):
             hits = [p for t, p in sent if t.endswith(suffix)]
-            self.assertEqual(hits, [{}] * len(TARGETS), suffix)
+            self.assertEqual(hits, [STAMP] * len(TARGETS), suffix)
         for suffix in (RING_MOUNT, PULSE_MOUNT):
             hits = [p for t, p in sent if t.endswith(suffix)]
             self.assertEqual(hits, [None] * len(TARGETS), f"{suffix} gets an empty retained clear")

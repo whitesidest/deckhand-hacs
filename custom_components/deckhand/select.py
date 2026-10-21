@@ -1,7 +1,6 @@
 """Select platform for Deckhand integration (theme selector)."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -12,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ._source import dumps_with_source
 from .const import (
     DOMAIN,
     FALLBACK_THEMES,
@@ -111,8 +111,12 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         team_id = store.get("team_id", "1")
 
         topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=self._dial_id)
+        src = await self._async_source()
+        # requested_by for servers that predate _src (helm#521).
         await mqtt.async_publish(
-            self.hass, topic, json.dumps({"slug": option, "requested_by": "theme selector"})
+            self.hass,
+            topic,
+            dumps_with_source({"slug": option, "requested_by": src["by"]}, src),
         )
         _LOGGER.info("Requested theme '%s' via Helm on %s", option, self._dial_id)
         if option in SERVER_RESOLVED_THEMES:

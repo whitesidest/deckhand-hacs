@@ -128,6 +128,12 @@ class _ServiceTest(unittest.TestCase):
             sorted(f"deckhand/{team}/dial/{dial}/cmd/timer" for dial, team in TARGETS),
         )
         payloads = [p for _t, p, _r in sent]
+        # Every cmd/timer says who sent it (activity record, 1.22.0); a
+        # stand-in call has no context, so it is plain "Home Assistant".
+        # Checked here, then lifted off so the shape pins below stay about
+        # the timer contract itself.
+        for p in payloads:
+            self.assertEqual(p.pop("_src", None), {"ch": "home_assistant", "by": "Home Assistant"})
         self.assertTrue(all(p == payloads[0] for p in payloads), payloads)
         self.assertTrue(all(r is False for _t, _p, r in sent), "cmd/timer must not be retained")
         return payloads[0]

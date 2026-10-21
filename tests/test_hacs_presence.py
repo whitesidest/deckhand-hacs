@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.21.0"  # 1.21.0 = the Perimeter Ring as a layer: bounce + retired-treatment fold, even layout, theme_colors / hide_when_calm, 64-char ids, live feed, clear_perimeter_ring
+    EXPECTED_VERSION = "1.22.0"  # 1.22.0 = every command and *_request says who sent it (_src: HA user / automation / script) for the unified activity record
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

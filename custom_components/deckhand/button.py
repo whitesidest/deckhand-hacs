@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ._source import dumps_with_source
 from .const import DOMAIN, TOPIC_CMD_REBOOT
 from .entity import DeckhandEntity
 
@@ -68,5 +69,6 @@ class DeckhandRebootButton(DeckhandEntity, ButtonEntity):
         team_id = store.get("team_id", "1")
         topic = TOPIC_CMD_REBOOT.format(team_id=team_id, dial_id=self._dial_id)
 
-        await mqtt.async_publish(self.hass, topic, "{}")
+        body = dumps_with_source({}, await self._async_source())
+        await mqtt.async_publish(self.hass, topic, body)
         _LOGGER.info("Sent reboot command to %s", self._dial_id)

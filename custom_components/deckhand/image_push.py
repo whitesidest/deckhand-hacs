@@ -34,6 +34,7 @@ import json
 import logging
 import struct
 
+from ._source import dumps_with_source
 from .const import IMAGE_CHUNK_SIZE_BYTES, IMAGE_DEFAULT_SIZE, TOPIC_CMD_IMAGE
 
 _LOGGER = logging.getLogger(__name__)
@@ -107,6 +108,8 @@ async def publish_image_to_dial(
     dial_id: str,
     source_bytes: bytes,
     size: int = IMAGE_DEFAULT_SIZE,
+    *,
+    source: dict[str, str] | None = None,
 ) -> int:
     """Convert + publish an image backdrop to one dial as chunked cmd/image.
 
@@ -117,6 +120,11 @@ async def publish_image_to_dial(
     Assumes the caller has already published ``cmd/announce`` with
     ``"image": true`` so the dial suppresses theme animation while it
     waits for the stream.
+
+    ``source`` (the ``_src`` stamp of whoever sent the announcement) rides
+    the ``start`` message only: that is the action; the chunks and ``done``
+    are its transport and stay byte-identical (a stamp per chunk would cost
+    ~50 x the bytes and say nothing new).
     """
     from homeassistant.components import mqtt
 
@@ -128,14 +136,15 @@ async def publish_image_to_dial(
     await mqtt.async_publish(
         hass,
         topic,
-        json.dumps(
+        dumps_with_source(
             {
                 "action": "start",
                 "w": size,
                 "h": size,
                 "size": len(rgb565),
                 "chunks": len(chunks),
-            }
+            },
+            source,
         ),
     )
 

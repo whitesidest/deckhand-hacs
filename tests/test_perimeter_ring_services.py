@@ -28,7 +28,7 @@ import unittest
 
 import yaml
 
-from test_emoji_strip_every_service import TARGETS, _ServiceTest
+from test_emoji_strip_every_service import STAMP, TARGETS, _ServiceTest
 from test_service_schema import SERVICES_YAML
 
 BINDINGS = [{"id": "front_door", "friendly_name": "Front Door", "state": "open",
@@ -57,7 +57,8 @@ class MountTargetsTheRing(_ServiceTest):
             self.assertEqual(payload["bindings"][0]["id"], "front_door")
 
     def _assert_pulse_retired(self, sent):
-        """The companion publishes: cmd/face/perimeter_pulse/unmount ("{}")
+        """The companion publishes: cmd/face/perimeter_pulse/unmount (only
+        the ``_src`` stamp)
         and an EMPTY retained clear on cmd/face/perimeter_pulse/mount — the
         same pair unmount_face sends — and never a pulse mount body."""
         unmounts = _with_suffix(sent, PULSE_UNMOUNT)
@@ -66,7 +67,7 @@ class MountTargetsTheRing(_ServiceTest):
         self.assertEqual(len(clears), len(TARGETS), f"one pulse clear per dial, got {clears}")
         for (dial_id, team_id), (utopic, upayload), (ctopic, cpayload) in zip(TARGETS, unmounts, clears):
             self.assertEqual(utopic, f"deckhand/{team_id}/dial/{dial_id}{PULSE_UNMOUNT}")
-            self.assertEqual(upayload, {})
+            self.assertEqual(upayload, STAMP)
             self.assertEqual(ctopic, f"deckhand/{team_id}/dial/{dial_id}{PULSE_MOUNT}")
             self.assertIsNone(cpayload, "the pulse mount topic gets an empty retained clear, not a mount")
 
@@ -126,7 +127,7 @@ class UnmountTargetsTheRing(_ServiceTest):
         clears = _with_suffix(sent, mount_suffix)
         self.assertEqual(len(unmounts), len(TARGETS))
         self.assertEqual(len(clears), len(TARGETS))
-        self.assertTrue(all(p == {} for _, p in unmounts))
+        self.assertTrue(all(p == STAMP for _, p in unmounts))
         self.assertTrue(all(p is None for _, p in clears))
 
     def test_unmount_face_pulse_id_takes_down_the_ring_and_the_retired_face(self):
