@@ -514,13 +514,19 @@ class QuietInvitationTests(unittest.TestCase):
 
     # ── wire-shape harness ───────────────────────────────────────
 
-    def _run_handler(self, name: str, call_data: dict):
+    def _run_handler(self, name: str, call_data: dict, context=None):
         """Exec the named async handler with stubs; return publishes.
 
         Each publish is recorded as (topic, payload_dict, retain) where
         retain is the kwarg value or "<omitted>" when not passed —
         letting the prompt-path pin assert the call signature did not
         change (it historically omits retain).
+
+        The activity-record ``_src`` stamp (1.22.0) is an envelope every
+        command carries, not part of any one service's wire shape: it is
+        lifted out of each recorded payload into ``self.last_sources`` (one
+        entry per publish, None when unstamped) so the shape pins below stay
+        about their own keys. test_activity_source.py asserts the stamps.
         """
         import ast
         import asyncio
@@ -552,11 +558,15 @@ class QuietInvitationTests(unittest.TestCase):
         ]
 
         publishes: list[tuple] = []
+        sources: list = []
+        self.last_sources = sources
 
         class _Mqtt:
             @staticmethod
             async def async_publish(hass, topic, payload, retain="<omitted>"):
-                publishes.append((topic, _json.loads(payload), retain))
+                body = _json.loads(payload)
+                sources.append(body.pop("_src", None) if isinstance(body, dict) else None)
+                publishes.append((topic, body, retain))
 
         class _SVE(Exception):
             def __init__(self, *args, **kwargs):
@@ -564,9 +574,6 @@ class QuietInvitationTests(unittest.TestCase):
 
         async def _noop_admin(call):
             return None
-
-        async def _automation_requester(call):
-            return "automation"
 
         # send_announcement's optional image backdrop. Returning None
         # keeps these runs on the text-only path — the image plumbing
@@ -587,6 +594,14 @@ class QuietInvitationTests(unittest.TestCase):
         _spec = importlib.util.spec_from_file_location("dial_text", INIT_PY.parent / "dial_text.py")
         _dial_text = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_dial_text)
+        # Likewise the REAL ``_src`` stamper (no package-relative imports).
+        _src_spec = importlib.util.spec_from_file_location("_source", INIT_PY.parent / "_source.py")
+        _source = importlib.util.module_from_spec(_src_spec)
+        _src_spec.loader.exec_module(_source)
+        stand_in_hass = getattr(self, "harness_hass", None)
+
+        async def _call_source(call):
+            return await _source.async_source_for(stand_in_hass, getattr(call, "context", None))
 
         ns: dict = {
             "strip_emoji_for_dial": _dial_text.strip_emoji_for_dial,
@@ -604,9 +619,10 @@ class QuietInvitationTests(unittest.TestCase):
             "ServiceValidationError": _SVE,
             "_LOGGER": logging.getLogger("test"),
             "_require_admin": _noop_admin,
-            # helm#521 — push_theme names the requester for Helm's audit
-            # row; no user on a harness call, so it reads as an automation.
-            "_requested_by": _automation_requester,
+            # helm#521 / activity record — who asked. The real resolver;
+            # a harness call has no context unless the test passes one.
+            "_call_source": _call_source,
+            "dumps_with_source": _source.dumps_with_source,
             "SERVER_RESOLVED_THEMES": ("random",),
             "TOPIC_THEME_REQUEST": "deckhand/{team_id}/dial/{dial_id}/theme_request",
             "TOPIC_CMD_THEME": "deckhand/{team_id}/dial/{dial_id}/cmd/theme",
@@ -632,7 +648,7 @@ class QuietInvitationTests(unittest.TestCase):
             compile(ast.Module(body=[*helpers, fn], type_ignores=[]), INIT_PY.name, "exec"),
             ns,
         )
-        call = SimpleNamespace(data=dict(call_data))
+        call = SimpleNamespace(data=dict(call_data), context=context)
         asyncio.run(ns[name](call))
         return publishes
 
@@ -936,7 +952,7 @@ class SetSunsetServiceTests(unittest.TestCase):
         # The firmware INBOUND_SUNSET handler keys on {"epoch": N}; make
         # sure the handler emits that exact key (not just sunset_at).
         src = _load_init_text()
-        self.assertIn('json.dumps({"epoch": epoch})', src)
+        self.assertIn('dumps_with_source({"epoch": epoch}, ', src)
 
 
 class EpochCoercionTests(unittest.TestCase):

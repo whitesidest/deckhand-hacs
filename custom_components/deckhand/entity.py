@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
+from ._source import async_source_for
 from .const import DOMAIN, HEARTBEAT_TIMEOUT, MANUFACTURER, HARDWARE_MODELS
 
 
@@ -33,6 +34,16 @@ class DeckhandEntity(Entity):
     def dial_id(self) -> str:
         """Return the dial ID."""
         return self._dial_id
+
+    async def _async_source(self) -> dict[str, str]:
+        """The ``_src`` stamp for the action this entity is taking now.
+
+        Home Assistant sets the entity's context from the service call
+        (button.press, number.set_value, select.select_option) before
+        calling the action, so it names the person, automation or script
+        behind it exactly as a Deckhand service call would.
+        """
+        return await async_source_for(self.hass, getattr(self, "_context", None))
 
     @property
     def available(self) -> bool:

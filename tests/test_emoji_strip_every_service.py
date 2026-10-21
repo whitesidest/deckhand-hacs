@@ -34,6 +34,9 @@ import test_entities_follow_heartbeats as standin  # installs the HA stand-in
 PKG = "deckhand_emoji_under_test"
 TARGETS = [("DECK-AAAA", "team-1"), ("DECK-BBBB", "team-1")]
 RENDERABLE = "← Back · Next → Café Привет こんにちは"
+# The activity-record stamp (1.22.0) on a call with no context — no person,
+# no automation — which is what every call in these stand-in tests is.
+STAMP = {"_src": {"ch": "home_assistant", "by": "Home Assistant"}}
 
 
 def _load_component():

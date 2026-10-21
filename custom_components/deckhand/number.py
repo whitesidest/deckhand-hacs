@@ -1,7 +1,6 @@
 """Number platform for Deckhand integration (brightness control)."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -12,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ._source import dumps_with_source
 from .const import DOMAIN, TOPIC_CMD_OVERLAY
 from .entity import DeckhandEntity
 
@@ -103,9 +103,8 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
         team_id = store.get("team_id", "1")
         topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=self._dial_id)
 
-        await mqtt.async_publish(
-            self.hass, topic, json.dumps({"brightness": int(value)}), qos=1, retain=False
-        )
+        body = dumps_with_source({"brightness": int(value)}, await self._async_source())
+        await mqtt.async_publish(self.hass, topic, body, qos=1, retain=False)
         self._attr_native_value = value
         self.async_write_ha_state()
         _LOGGER.info("Set brightness %d on %s", int(value), self._dial_id)

@@ -154,6 +154,23 @@ class PublishSequenceTests(unittest.TestCase):
         # Last = done.
         self.assertEqual(payloads[-1], {"action": "done"})
 
+    def test_only_the_start_message_carries_the_source(self):
+        """The announcement's ``_src`` (activity record, 1.22.0) rides the
+        ``start`` — the action. Chunks and ``done`` are its transport and
+        stay byte-identical: a stamp per chunk would cost ~50x and say
+        nothing new."""
+        src = {"ch": "home_assistant", "by": "Tyler"}
+        asyncio.run(
+            image_push.publish_image_to_dial(
+                _FakeHass(), "t", "d", _make_test_jpeg(), size=360, source=src
+            )
+        )
+        payloads = [json.loads(p) for _, p in self.mqtt.published]
+        self.assertEqual(payloads[0]["action"], "start")
+        self.assertEqual(payloads[0]["_src"], src)
+        self.assertTrue(all("_src" not in p for p in payloads[1:]))
+        self.assertEqual(payloads[-1], {"action": "done"})
+
     def test_each_image_message_under_8kb(self):
         """Firmware drops any cmd/image payload >= 8192 bytes."""
         jpeg = _make_test_jpeg()

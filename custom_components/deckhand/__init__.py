@@ -77,6 +77,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
 )
 from .image_push import publish_image_to_dial
+from ._source import async_source_for, dumps_with_source
 from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
@@ -1381,17 +1382,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
     # the team. Gate them behind HA admin — a guest on the household
     # Lovelace shouldn't be able to reboot the lobby dials or replace
     # an announcement with attacker copy.
-    async def _requested_by(call) -> str:
-        """Who asked, for Helm's audit row (helm#521).
+    async def _call_source(call) -> dict[str, str]:
+        """Who asked, as the ``_src`` stamp for the activity record.
 
-        The HA user's name when a person called the service; "automation"
-        when HA itself did (automations and scripts carry no user_id).
+        ``{"ch": "home_assistant", "by": <who>}`` where ``who`` is the HA
+        user's name when a person called the service, ``automation: <name>``
+        / ``script: <name>`` when one of those did, else "automation" or
+        "Home Assistant" (see ``_source.async_describe_actor``). Every
+        command and ``*_request`` this integration publishes carries it;
+        push_theme also sends ``by`` as ``requested_by`` (helm#521) for
+        servers that predate ``_src``.
         """
-        user_id = getattr(getattr(call, "context", None), "user_id", None)
-        if not user_id:
-            return "automation"
-        user = await hass.auth.async_get_user(user_id)
-        return ((user.name if user is not None else "") or user_id)[:64]
+        return await async_source_for(hass, getattr(call, "context", None))
 
     async def _require_admin(call) -> None:
         user_id = getattr(getattr(call, "context", None), "user_id", None)
@@ -1451,16 +1453,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # Helm's previous theme, and the next reconnect replayed the old
         # one — a Sunset automation's theme was undone every time a dial
         # dropped and came back (helm#538). One path, one retained slot.
+        src = await _call_source(call)
         request: dict[str, Any] = {
             "slug": theme.strip(),
-            "requested_by": await _requested_by(call),
+            # Pre-_src servers read this; newer ones prefer _src.
+            "requested_by": src["by"],
         }
         if isinstance(theme_options, dict) and theme_options:
             request["config"] = {
                 k: v for k, v in theme_options.items()
                 if isinstance(k, str) and not k.startswith("_")
             }
-        body = json.dumps(request)
+        body = dumps_with_source(request, src)
         for dial_id, team_id in targets:
             topic = TOPIC_THEME_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
@@ -1551,14 +1555,17 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # push_announcement_to_dial ``image=True``).
         if image_bytes is not None:
             payload["image"] = True
-        body = json.dumps(payload)
+        src = await _call_source(call)
+        body = dumps_with_source(payload, src)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
             # cmd/announce with image:true FIRST, then the image stream.
             await mqtt.async_publish(hass, topic, body)
             if image_bytes is not None:
                 try:
-                    await publish_image_to_dial(hass, team_id, dial_id, image_bytes)
+                    await publish_image_to_dial(
+                        hass, team_id, dial_id, image_bytes, source=src
+                    )
                 except Exception:  # noqa: BLE001 - best-effort; text already sent
                     _LOGGER.exception(
                         "send_announcement: image push failed for dial %s "
@@ -1641,7 +1648,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if isinstance(celebration_theme, str) and celebration_theme.strip():
             payload["celebration_theme_id"] = celebration_theme.strip()
 
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
@@ -1677,8 +1684,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             )
         return targets
 
-    async def _publish_timer(targets: list[tuple[str, str]], payload: dict[str, Any]) -> None:
-        body = json.dumps(payload)
+    async def _publish_timer(
+        call, targets: list[tuple[str, str]], payload: dict[str, Any]
+    ) -> None:
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_TIMER.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
@@ -1746,7 +1755,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             payload["name"] = name
         if color:
             payload["color"] = color
-        await _publish_timer(targets, payload)
+        await _publish_timer(call, targets, payload)
         _LOGGER.info(
             "start_timer: %ds label=%r from=%r → %d dial(s)",
             seconds, label, from_name, len(targets),
@@ -1763,7 +1772,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         msg = {"action": "cancel"}
         if name:
             msg["name"] = name
-        await _publish_timer(targets, msg)
+        await _publish_timer(call, targets, msg)
         _LOGGER.info("cancel_timer%s → %d dial(s)", f" '{name}'" if name else "", len(targets))
 
     async def _add_timer_time(call) -> None:
@@ -1786,7 +1795,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         msg = {"action": "add", "seconds": seconds}
         if name:
             msg["name"] = name
-        await _publish_timer(targets, msg)
+        await _publish_timer(call, targets, msg)
         _LOGGER.info("add_timer_time: +%ds%s → %d dial(s)", seconds,
                      f" '{name}'" if name else "", len(targets))
 
@@ -1985,7 +1994,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 for eid, lbl in bound_entities:
                     await _push_sensor_value_for_entity(hass, team_id, dial_id, eid, lbl)
 
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_OVERLAY.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
@@ -2168,9 +2177,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
+        body = dumps_with_source({}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_REBOOT.format(team_id=team_id, dial_id=dial_id)
-            await mqtt.async_publish(hass, topic, "{}")
+            await mqtt.async_publish(hass, topic, body)
         _LOGGER.info(
             "Sent reboot command to %d dial(s): %s",
             len(targets), ", ".join(d for d, _ in targets),
@@ -2220,7 +2230,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_key="unknown_device",
             )
 
-        body = json.dumps({"on": on, "source": "ha"})
+        body = dumps_with_source({"on": on, "source": "ha"}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_DND.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, qos=1, retain=True)
@@ -2254,7 +2264,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_SETTINGS_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, qos=1, retain=False)
@@ -2432,7 +2442,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_key="unknown_device",
             )
 
-        body = json.dumps({"epoch": epoch})
+        body = dumps_with_source({"epoch": epoch}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_SUNSET.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body)
@@ -2553,21 +2563,27 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         return out
 
     async def _publish_face_mount(
-        face_id: str, payload: dict[str, Any], targets: list, retained: bool = True
+        face_id: str,
+        payload: dict[str, Any],
+        targets: list,
+        retained: bool = True,
+        src: dict[str, str] | None = None,
     ) -> None:
         # Every face's display text (message text, climate title, charge
         # label/range/eta, sensor labels, perimeter friendly names) loses its
         # emoji here, the one place both mount services publish from
         # (helm#399). Identifiers and action config are never touched.
         payload = strip_emoji_keys(payload, FACE_MOUNT_TEXT_KEYS)
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, src)
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_FACE_MOUNT.format(
                 team_id=team_id, dial_id=dial_id, face_id=face_id,
             )
             await mqtt.async_publish(hass, topic, body, retain=retained)
 
-    async def _publish_face_unmount(face_id: str, targets: list) -> None:
+    async def _publish_face_unmount(
+        face_id: str, targets: list, src: dict[str, str] | None = None
+    ) -> None:
         """``cmd/face/<id>/unmount`` AND an empty retained publish on the
         mount topic. The clear is the point: without it the next broker
         (re)connect replays the stale retained mount and resurrects the
@@ -2579,10 +2595,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             mount_topic = TOPIC_CMD_FACE_MOUNT.format(
                 team_id=team_id, dial_id=dial_id, face_id=face_id,
             )
-            await mqtt.async_publish(hass, unmount_topic, "{}", retain=False)
+            # The unmount is the action and says who did it; the empty
+            # retained clear is its housekeeping and stays a bare "".
+            await mqtt.async_publish(
+                hass, unmount_topic, dumps_with_source({}, src), retain=False
+            )
             await mqtt.async_publish(hass, mount_topic, "", retain=True)
 
-    async def _retire_pulse_mount(targets: list) -> None:
+    async def _retire_pulse_mount(
+        targets: list, src: dict[str, str] | None = None
+    ) -> None:
         """Companion to every perimeter_ring mount / unmount: take down the
         retired ``perimeter_pulse`` hero face and clear its retained mount.
 
@@ -2593,7 +2615,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         0.4.123 acks no_face_active), so this is safe on a fleet that
         never saw the pulse face.
         """
-        await _publish_face_unmount(PERIMETER_RETIRED_FACE_ID, targets)
+        await _publish_face_unmount(PERIMETER_RETIRED_FACE_ID, targets, src)
 
     async def _mount_perimeter_ring(call) -> None:
         """Mount the Perimeter Ring overlay with structured bindings +
@@ -2701,8 +2723,11 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
         # Retired hero face first, then the ring: a stale retained pulse
         # mount must not outlive the ring that replaced it.
-        await _retire_pulse_mount(targets)
-        await _publish_face_mount(PERIMETER_FACE_ID, payload, targets, retained=True)
+        src = await _call_source(call)
+        await _retire_pulse_mount(targets, src)
+        await _publish_face_mount(
+            PERIMETER_FACE_ID, payload, targets, retained=True, src=src
+        )
         _LOGGER.info(
             "mount_perimeter_ring: %d binding(s) → %d dial(s)",
             len(bindings), len(targets),
@@ -2810,8 +2835,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        await _retire_pulse_mount(targets)
-        await _publish_face_unmount(PERIMETER_FACE_ID, targets)
+        src = await _call_source(call)
+        await _retire_pulse_mount(targets, src)
+        await _publish_face_unmount(PERIMETER_FACE_ID, targets, src)
         _LOGGER.info("clear_perimeter_ring: %d dial(s)", len(targets))
 
     async def _mount_face(call) -> None:
@@ -2849,9 +2875,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         payload.setdefault("face_id", face_id)
         payload.setdefault("schema_version", 1)
         retained = bool(call.data.get("retained", True))
+        src = await _call_source(call)
         if face_id == PERIMETER_FACE_ID:
-            await _retire_pulse_mount(targets)
-        await _publish_face_mount(face_id, payload, targets, retained=retained)
+            await _retire_pulse_mount(targets, src)
+        await _publish_face_mount(face_id, payload, targets, retained=retained, src=src)
         _LOGGER.info(
             "mount_face: %s → %d dial(s) (retained=%s)",
             face_id, len(targets), retained,
@@ -2890,9 +2917,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
+        src = await _call_source(call)
         if face_id == PERIMETER_FACE_ID:
-            await _retire_pulse_mount(targets)
-        await _publish_face_unmount(face_id, targets)
+            await _retire_pulse_mount(targets, src)
+        await _publish_face_unmount(face_id, targets, src)
         _LOGGER.info("unmount_face: %s → %d dial(s)", face_id, len(targets))
 
     async def _add_menu_item(call) -> None:
@@ -2976,7 +3004,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                     "domains": ", ".join(domains),
                 },
             )
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3001,7 +3029,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps({"action": "remove", "key": key})
+        body = dumps_with_source({"action": "remove", "key": key}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3015,7 +3043,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_ALARM_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3097,7 +3125,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CREDENTIAL_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3165,7 +3193,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps(payload)
+        body = dumps_with_source(payload, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_SCHEDULE_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3251,7 +3279,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_domain=DOMAIN,
                 translation_key="unknown_device",
             )
-        body = json.dumps({"action": "push", "profile": profile})
+        body = dumps_with_source({"action": "push", "profile": profile}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_MENU_REQUEST.format(team_id=team_id, dial_id=dial_id)
             await mqtt.async_publish(hass, topic, body, retain=False)
@@ -3384,6 +3412,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
 
             # Helm bakes this into the prompt AND the menu item label.
             request = strip_emoji_keys(request, INVITATION_TEXT_KEYS)
+            src = await _call_source(call)
             sent_ids = []
             for dial_id, team_id in targets:
                 invitation_id = explicit_id or secrets.token_urlsafe(12)
@@ -3393,7 +3422,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                     team_id=team_id, dial_id=dial_id,
                 )
                 await mqtt.async_publish(
-                    hass, topic, json.dumps(request), retain=False
+                    hass, topic, dumps_with_source(request, src), retain=False
                 )
             _LOGGER.info(
                 "send_invitation (menu): %s → %d dial(s) (%s)",
@@ -3456,6 +3485,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # Subtitle, button labels and sender line (helm#399). on_accept is
         # opaque action data the dial echoes back — never walked.
         payload = strip_emoji_keys(payload, INVITATION_TEXT_KEYS)
+        src = await _call_source(call)
 
         sent_ids: list[str] = []
         for dial_id, team_id in targets:
@@ -3465,7 +3495,7 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             topic = TOPIC_CMD_FACE_MOUNT.format(
                 team_id=team_id, dial_id=dial_id, face_id="invitation",
             )
-            await mqtt.async_publish(hass, topic, json.dumps(payload))
+            await mqtt.async_publish(hass, topic, dumps_with_source(payload, src))
         _LOGGER.info(
             "send_invitation: %s → %d dial(s) (%s)",
             text[:40], len(targets), ", ".join(sent_ids),
@@ -3500,9 +3530,10 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if not invitation_id:
             raise ServiceValidationError("invitation_id is required")
 
-        body = json.dumps({"invitation_id": invitation_id})
-        request_body = json.dumps(
-            {"action": "cancel", "invitation_id": invitation_id}
+        src = await _call_source(call)
+        body = dumps_with_source({"invitation_id": invitation_id}, src)
+        request_body = dumps_with_source(
+            {"action": "cancel", "invitation_id": invitation_id}, src
         )
         for dial_id, team_id in targets:
             topic = (
