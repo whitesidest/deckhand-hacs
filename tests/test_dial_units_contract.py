@@ -16,7 +16,7 @@ That is live here, not latent: ``safe_unit_for_dial`` runs no NFKD pass —
 it maps known glyphs and then ascii-encodes with ``ignore`` — so an
 unmapped narrow space is DELETED rather than folded. Home Assistant very
 commonly emits U+202F inside units, so "21 °C" was reaching the dial as
-"21*C" while Helm rendered "21 *C".
+"21*C" while Helm rendered "21 °C".
 
 The module loads by path so it's exercised without a HA runtime.
 
@@ -60,8 +60,8 @@ TEXT_VECTORS = [
 
 # (unit_in, expected_out)
 UNIT_VECTORS = [
-    ("°C", "*C"),
-    ("°F", "*F"),
+    ("°C", "°C"),
+    ("°F", "°F"),
     ("µg/m³", "ug/m3"),
     ("μg/m³", "ug/m3"),   # GREEK MU, distinct codepoint from MICRO SIGN
     ("m²", "m2"),
@@ -69,14 +69,14 @@ UNIT_VECTORS = [
     ("kWh", "kWh"),
     ("%", "%"),
     # The regression this file was added for.
-    ("21 °C", "21 *C"),   # THIN SPACE
-    ("21 °C", "21 *C"),   # NARROW NO-BREAK SPACE
+    ("21 °C", "21 °C"),   # THIN SPACE
+    ("21 °C", "21 °C"),   # NARROW NO-BREAK SPACE
     ("", ""),
 ]
 
 # (state, attributes, expected_value, expected_unit)
 VALUE_VECTORS = [
-    ("21.5", {"unit_of_measurement": "°C"}, "21.5", "*C"),
+    ("21.5", {"unit_of_measurement": "°C"}, "21.5", "°C"),
     ("42", {"unit_of_measurement": "µg/m³"}, "42", "ug/m3"),
     ("on", None, "ON", ""),
     ("off", None, "OFF", ""),
@@ -92,9 +92,12 @@ class DialUnitContract(unittest.TestCase):
                 self.assertEqual(safe_unit_for_dial(raw), expected)
 
     def test_no_unit_output_is_non_ascii(self):
+        # ASCII plus the degree sign, the one glyph every dial font draws
+        # and the firmware unit normalizer understands (folding it to "*"
+        # made temperatures read "68*F").
         for raw, _ in UNIT_VECTORS:
             with self.subTest(unit=raw):
-                self.assertTrue(safe_unit_for_dial(raw).isascii())
+                self.assertTrue(safe_unit_for_dial(raw).replace("°", "").isascii())
 
     def test_names_fold_to_ascii(self):
         for raw, expected in TEXT_VECTORS:
