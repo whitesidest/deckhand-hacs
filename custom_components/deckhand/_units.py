@@ -38,9 +38,6 @@ DIAL_UNIT_GLYPH_MAP: dict[str, str] = {
     "½": "1/2",
     "¼": "1/4",
     "¾": "3/4",
-    "°": "*",   # DEGREE SIGN — fall back to * even though firmware
-                     # fonts often ship °, because HA pairs ° with
-                     # superscripts and we want a consistent shape.
     "\u2009": " ",   # THIN SPACE (U+2009)
     "\u202f": " ",   # NARROW NO-BREAK SPACE (U+202F)
 }
@@ -70,6 +67,17 @@ DIAL_LETTER_FOLD: dict[str, str] = {
 }
 
 
+# The degree sign is the one non-ASCII glyph kept: every dial font draws it
+# (Montserrat is built with 0xB0, plus the Noto Latin-1 fallback), the
+# firmware's unit normalizer understands "°F", and folding it to "*" made
+# temperatures read "68*F" on the dial.
+DIAL_KEEP = {"°"}
+
+
+def _ascii_plus_degree(text: str) -> str:
+    return "".join(ch for ch in text if ord(ch) < 128 or ch in DIAL_KEEP)
+
+
 def safe_text_for_dial(text: str) -> str:
     """ASCII-fold a human-facing string for the dial, preserving letters.
 
@@ -94,15 +102,14 @@ def safe_text_for_dial(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", folded)
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     mapped = "".join(DIAL_UNIT_GLYPH_MAP.get(ch, ch) for ch in stripped)
-    return mapped.encode("ascii", "ignore").decode("ascii")
+    return _ascii_plus_degree(mapped)
 
 
 def safe_unit_for_dial(unit: str) -> str:
     """Strip codepoints the firmware font can't render.
 
     Maps known Latin-1 / Greek glyphs to ASCII equivalents (μ→u, ³→3,
-    ° → *, etc.) then ASCII-encodes with ``ignore`` to drop anything
-    still non-ASCII — defense in depth so an HA integration we haven't
+    etc.) then drops anything still non-ASCII except the degree sign — defense in depth so an HA integration we haven't
     seen yet can't leak a glyph past the firmware's ``unit_normalize_to``
     (which only knows the Latin-1 supplement and would otherwise let
     Greek/Cyrillic bytes through as tofu rectangles).
@@ -110,7 +117,7 @@ def safe_unit_for_dial(unit: str) -> str:
     if not unit:
         return ""
     mapped = "".join(DIAL_UNIT_GLYPH_MAP.get(ch, ch) for ch in unit)
-    return mapped.encode("ascii", "ignore").decode("ascii")
+    return _ascii_plus_degree(mapped)
 
 
 def format_sensor_value(
