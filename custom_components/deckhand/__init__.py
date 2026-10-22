@@ -2840,8 +2840,38 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         await _publish_face_unmount(PERIMETER_FACE_ID, targets, src)
         _LOGGER.info("clear_perimeter_ring: %d dial(s)", len(targets))
 
+    def _face_ring_payload(perimeter: Any) -> dict[str, Any] | None:
+        """A hero payload's ``perimeter`` block as a ring mount, or None.
+
+        Shaped like ``mount_perimeter_ring`` shapes its bindings; the
+        layer-level keys (bar_thickness, theme_colors, …) pass through."""
+        if not isinstance(perimeter, dict):
+            return None
+        raw = perimeter.get("bindings")
+        if not isinstance(raw, list):
+            return None
+        bindings = [b for b in (_build_perimeter_binding(e) for e in raw) if b]
+        if not bindings:
+            return None
+        bindings = bindings[:PERIMETER_MAX_BINDINGS]
+        perimeter_layout_bindings(bindings, bool(perimeter.get("contiguous") or False))
+        ring = {k: v for k, v in perimeter.items() if k not in ("bindings", "face_id", "schema_version")}
+        return {"face_id": PERIMETER_FACE_ID, "schema_version": 1, **ring, "bindings": bindings}
+
     async def _mount_face(call) -> None:
-        """Generic mount — escape hatch for forward-compat with new faces."""
+        """Generic mount — escape hatch for forward-compat with new faces.
+
+        The perimeter ring (founder, 2026-10-22): the dial holds one ring
+        slot, and a face mount never touches it — the dial keeps wearing its
+        HOME ring (``mount_perimeter_ring``) under a face with no ring of its
+        own. A payload carrying its own ``perimeter`` block goes up as that
+        face's ring: a sibling ring mount published BEFORE the hero, stamped
+        ``_src.via = <face_id>`` so Helm / Console record it as the face's
+        ring and not as the home ring. This integration keeps no state, so
+        it cannot put the home ring back itself; the server does, when it
+        sees the next ring-less face mount or the face going (unmount, the
+        dial's own revert).
+        """
         await _require_admin(call)
         device_id = call.data.get("device_id")
         face_id = call.data.get("face_id")
@@ -2878,6 +2908,16 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         src = await _call_source(call)
         if face_id == PERIMETER_FACE_ID:
             await _retire_pulse_mount(targets, src)
+        else:
+            # The face's own ring rides beside the hero, never inside its
+            # fixed-size mount buffer. Ring first, so a server watching the
+            # broker sees it before the hero it belongs to.
+            face_ring = _face_ring_payload(payload.pop("perimeter", None))
+            if face_ring:
+                await _publish_face_mount(
+                    PERIMETER_FACE_ID, face_ring, targets, retained=True,
+                    src={**src, "via": face_id},
+                )
         await _publish_face_mount(face_id, payload, targets, retained=retained, src=src)
         _LOGGER.info(
             "mount_face: %s → %d dial(s) (retained=%s)",

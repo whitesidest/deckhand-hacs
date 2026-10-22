@@ -177,3 +177,47 @@ class ManifestBumped(unittest.TestCase):
         manifest = Path(SERVICES_YAML).with_name("manifest.json")
         version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
         self.assertGreaterEqual(tuple(int(p) for p in version.split(".")), (1, 18, 1))
+
+
+class MountFaceAndTheRing(_ServiceTest):
+    """Home ring vs face ring (founder, 2026-10-22). The dial holds one ring
+    slot; ``mount_face`` never takes it down (the home ring stays under a
+    face with no ring of its own), and a face payload's own ``perimeter``
+    block goes up as a sibling ring mount BEFORE the hero, stamped
+    ``_src.via`` so Helm / Console record it as the face's ring."""
+
+    def test_a_face_without_a_ring_never_touches_the_ring(self):
+        sent = self.call("mount_face", face_id="sensor",
+                         payload={"quads": [{"entity_id": "sensor.pool"}]})
+        self.assertEqual(_with_suffix(sent, RING_MOUNT), [])
+        self.assertEqual(_with_suffix(sent, RING_UNMOUNT), [])
+
+    def test_a_faces_own_ring_goes_up_first_and_names_its_face(self):
+        sent = self.call("mount_face", face_id="sensor", payload={
+            "quads": [{"entity_id": "sensor.pool"}],
+            "perimeter": {"bar_thickness": 9, "bindings": BINDINGS},
+        })
+        rings = _with_suffix(sent, RING_MOUNT)
+        heroes = _with_suffix(sent, "/cmd/face/sensor/mount")
+        self.assertEqual(len(rings), len(TARGETS))
+        self.assertEqual(len(heroes), len(TARGETS))
+        topics = [t for t, _ in sent]
+        self.assertLess(topics.index(rings[-1][0]), topics.index(heroes[0][0]),
+                        "the face's ring must be published before its hero")
+        ring = rings[0][1]
+        self.assertEqual(ring["face_id"], "perimeter_ring")
+        self.assertEqual(ring["bar_thickness"], 9)
+        self.assertEqual(ring["bindings"][0]["id"], "front_door")
+        self.assertEqual(ring["_src"], {**STAMP["_src"], "via": "sensor"})
+        self.assertNotIn("perimeter", heroes[0][1], "the ring never rides in the hero's mount")
+        self.assertEqual(heroes[0][1]["_src"], STAMP["_src"])
+
+    def test_an_empty_perimeter_block_mounts_no_ring(self):
+        sent = self.call("mount_face", face_id="clock",
+                         payload={"perimeter": {"bindings": []}})
+        self.assertEqual(_with_suffix(sent, RING_MOUNT), [])
+        self.assertNotIn("perimeter", _with_suffix(sent, "/cmd/face/clock/mount")[0][1])
+
+    def test_the_home_ring_carries_no_via(self):
+        sent = self.call("mount_perimeter_ring", bindings=BINDINGS)
+        self.assertNotIn("via", _with_suffix(sent, RING_MOUNT)[0][1]["_src"])
