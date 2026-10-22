@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.22.0"  # 1.22.0 = every command and *_request says who sent it (_src: HA user / automation / script) for the unified activity record
+    EXPECTED_VERSION = "1.22.1"  # 1.22.1 = mount_face never takes the ring down; a face's own perimeter block mounts as a ring before it, stamped _src.via (home ring vs face ring)
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

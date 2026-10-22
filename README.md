@@ -555,6 +555,19 @@ data:
       state: "{{ 'exporting' if states('sensor.grid_power')|float(0) > 0 else 'importing' }}"
 ```
 
+**Home ring and face ring.** The dial holds one ring. A ring mounted on its
+own (`mount_perimeter_ring`) is the dial's **home ring**: it stays up through
+every face change, revert, theme and menu, and only `clear_perimeter_ring`
+(or `unmount_face` with `face_id: perimeter_ring`) takes it off. A
+`mount_face` payload may carry its own `perimeter` block (same fields as
+above); that is the **face ring**, mounted beside the face (before it) and
+worn while that face shows. `mount_face` never takes a ring down. This
+integration keeps no state, so it does not put the home ring back when the
+face goes: Helm and Console watch the broker and do it — on the next face
+without a ring of its own, on `unmount_face` of that face, or when the dial
+reverts the face itself. A face ring is stamped `_src.via` so they can tell
+it from a home ring.
+
 The full-screen **Perimeter Pulse** face is retired in favour of the ring.
 `deckhand.mount_perimeter_pulse` is kept as an alias for
 `mount_perimeter_ring` (same fields, same `cmd/face/perimeter_ring/mount`

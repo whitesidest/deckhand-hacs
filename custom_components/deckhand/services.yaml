@@ -1387,7 +1387,10 @@ mount_face:
   description: >
     Generic escape hatch — mount any registered face by id with a free-
     form payload dict. Used for forward compatibility with faces the
-    HACS integration doesn't know about yet.
+    HACS integration doesn't know about yet. Never takes the perimeter
+    ring down: the dial keeps its home ring. A payload with its own
+    perimeter block mounts that face's ring beside it (Helm / Console put
+    the home ring back when the face goes).
   fields:
     device_id:
       name: Device
