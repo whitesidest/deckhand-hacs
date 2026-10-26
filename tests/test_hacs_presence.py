@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.22.1"  # 1.22.1 = mount_face never takes the ring down; a face's own perimeter block mounts as a ring before it, stamped _src.via (home ring vs face ring)
+    EXPECTED_VERSION = "1.22.2"  # 1.22.2 = a Wi-Fi QR item's qr_request fetch (button_press action "qr_request") is never fired as deckhand_dial_event
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

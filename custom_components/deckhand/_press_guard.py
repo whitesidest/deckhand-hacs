@@ -34,6 +34,22 @@ ACCEPT = "accept"
 DUPLICATE = "duplicate"
 STALE = "stale"
 
+# An on-demand Wi-Fi QR menu item (deckhand-firmware #226) publishes a
+# ``button_press`` with ``payload.action == "qr_request"`` when it is opened,
+# asking Helm/Console for its code. That is an internal fetch, not a person
+# pressing the item, so it must never reach ``deckhand_dial_event`` (and the
+# automations, device triggers and event entities keyed on it). Helm and
+# Console drop it from their own HA relays the same way.
+QR_REQUEST_ACTION = "qr_request"
+
+
+def is_internal_request(envelope: dict) -> bool:
+    """True for a dial event that is plumbing, not a user action."""
+    if not isinstance(envelope, dict) or envelope.get("type") != "button_press":
+        return False
+    inner = envelope.get("payload")
+    return isinstance(inner, dict) and inner.get("action") == QR_REQUEST_ACTION
+
 
 class PressGuard:
     """Remembers recent press ids; one instance per config entry."""
