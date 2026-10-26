@@ -79,7 +79,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 from .image_push import publish_image_to_dial
 from ._source import async_source_for, dumps_with_source
 from ._media_control import media_service_for_dial_event
-from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard
+from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard, is_internal_request
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
 from ._presence import PRESENCE_INTERVAL_S, build_presence_payload
 from ._perimeter import (
@@ -554,6 +554,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         if len(parts) >= 5:
             dial_id = parts[3]
         else:
+            return
+
+        # A Wi-Fi QR item fetching its code is not a press: never fire it.
+        if is_internal_request(payload):
             return
 
         verdict = press_guard.check(dial_id, payload)

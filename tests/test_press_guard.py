@@ -80,7 +80,46 @@ class PressGuardTests(unittest.TestCase):
         self.assertEqual(self.g.check("D", _press("n-8", ts=later), later), _pg.ACCEPT)
 
 
+class QrRequestTests(unittest.TestCase):
+    def test_qr_request_is_internal(self):
+        ev = {"type": "button_press", "ts": NOW,
+              "payload": {"item_id": "wifi_guest", "action": "qr_request"}}
+        self.assertTrue(_pg.is_internal_request(ev))
+
+    def test_normal_press_is_not_internal(self):
+        self.assertFalse(_pg.is_internal_request(_press("n-9")))
+        ev = _press(None)
+        ev["payload"]["action"] = "toggle"
+        self.assertFalse(_pg.is_internal_request(ev))
+
+    def test_action_only_counts_on_a_button_press(self):
+        ev = {"type": "timer_start", "payload": {"action": "qr_request"}}
+        self.assertFalse(_pg.is_internal_request(ev))
+
+    def test_top_level_action_is_not_the_contract(self):
+        # The firmware nests action under payload; a stray top-level key
+        # must not swallow a real press.
+        ev = _press(None)
+        ev["action"] = "qr_request"
+        self.assertFalse(_pg.is_internal_request(ev))
+
+    def test_malformed_envelopes(self):
+        for ev in (None, [], {}, {"type": "button_press"},
+                   {"type": "button_press", "payload": "qr_request"}):
+            self.assertFalse(_pg.is_internal_request(ev))
+
+
 class WiringTests(unittest.TestCase):
+    def test_qr_request_returns_before_anything_fires(self):
+        src = INIT_PY.read_text()
+        skip = src.index("if is_internal_request(payload):\n            return")
+        guard = src.index("press_guard.check(dial_id, payload)")
+        fire = src.index('f"{DOMAIN}_dial_event",\n            {\n                "dial_id": dial_id,')
+        media = src.index("_dispatch_dial_media_control(hass, payload)")
+        self.assertLess(skip, guard)
+        self.assertLess(skip, fire)
+        self.assertLess(skip, media)
+
     def test_event_handler_consults_the_guard_before_firing(self):
         src = INIT_PY.read_text()
         guard = src.index("press_guard.check(dial_id, payload)")
