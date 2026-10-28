@@ -33,6 +33,7 @@ import base64
 import json
 import logging
 import struct
+from dataclasses import dataclass
 
 from ._source import dumps_with_source
 from .const import IMAGE_CHUNK_SIZE_BYTES, IMAGE_DEFAULT_SIZE, TOPIC_CMD_IMAGE
@@ -49,6 +50,11 @@ except ImportError:  # pragma: no cover - PIL is present in real HA
     Image = None  # type: ignore[assignment]
     _PIL_AVAILABLE = False
 
+try:
+    import numpy as _np
+except ImportError:  # pragma: no cover - numpy is present in real HA
+    _np = None
+
 
 def rgb565_from_bytes(source_bytes: bytes, size: int = IMAGE_DEFAULT_SIZE) -> bytes:
     """Convert encoded image bytes (JPEG/PNG/…) to a packed RGB565 buffer.
@@ -59,15 +65,22 @@ def rgb565_from_bytes(source_bytes: bytes, size: int = IMAGE_DEFAULT_SIZE) -> by
       3. Resize to ``size`` x ``size`` (LANCZOS)
       4. Pack to RGB565 little-endian
 
-    CPU-bound (PIL + a tight pack loop) — callers on the event loop MUST
-    run this via ``hass.async_add_executor_job``.
+    ``draft`` lets the JPEG decoder scale by 1/2, 1/4 or 1/8 while it
+    decodes (never below ``size``), so a 1080p doorbell frame is decoded
+    at 540p instead of being fully decoded and then thrown away by the
+    resize. It is a no-op for PNG and other formats.
+
+    CPU-bound — callers on the event loop MUST run this via
+    ``hass.async_add_executor_job``.
     """
     if not _PIL_AVAILABLE:  # pragma: no cover - only in bare test env
         raise RuntimeError("Pillow (PIL) is not available")
 
     import io
 
-    img = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    img = Image.open(io.BytesIO(source_bytes))
+    img.draft("RGB", (size, size))
+    img = img.convert("RGB")
 
     # Center-crop to square.
     w, h = img.size
@@ -79,8 +92,22 @@ def rgb565_from_bytes(source_bytes: bytes, size: int = IMAGE_DEFAULT_SIZE) -> by
     # Resize to target.
     img = img.resize((size, size), Image.LANCZOS)
 
-    # Pack RGB565 little-endian. Same bit math as image_utils.py:
-    #   rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+    return _pack_rgb565(img, size)
+
+
+def _pack_rgb565(img, size: int) -> bytes:
+    """Pack an RGB image to RGB565 little-endian. Same bit math as
+    image_utils.py: ``((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)``.
+
+    numpy ships with HA core and does the 129,600 pixels of a 360x360
+    frame in a few ms; the per-pixel loop is the fallback and took most
+    of a second per dial on HA-class hardware.
+    """
+    if _np is not None:
+        a = _np.asarray(img, dtype=_np.uint16)
+        packed = ((a[..., 0] & 0xF8) << 8) | ((a[..., 1] & 0xFC) << 3) | (a[..., 2] >> 3)
+        return packed.astype("<u2").tobytes()
+
     pixels = img.load()
     buf = bytearray(size * size * 2)
     idx = 0
@@ -102,20 +129,34 @@ def rgb565_to_chunks(data: bytes, chunk_size: int = IMAGE_CHUNK_SIZE_BYTES) -> l
     return chunks
 
 
-async def publish_image_to_dial(
+@dataclass(frozen=True)
+class PreparedImage:
+    """An image converted and chunked once, ready to stream to any dial."""
+
+    size: int
+    nbytes: int
+    chunks: list[str]
+
+
+def prepare_image(source_bytes: bytes, size: int = IMAGE_DEFAULT_SIZE) -> PreparedImage:
+    """Convert + chunk ``source_bytes``. CPU-bound: run it in the executor.
+
+    A room announcement sends the same picture to every dial, so the
+    conversion happens once per send, not once per dial.
+    """
+    rgb565 = rgb565_from_bytes(source_bytes, size)
+    return PreparedImage(size=size, nbytes=len(rgb565), chunks=rgb565_to_chunks(rgb565))
+
+
+async def publish_prepared_image(
     hass,
     team_id: str,
     dial_id: str,
-    source_bytes: bytes,
-    size: int = IMAGE_DEFAULT_SIZE,
+    image: PreparedImage,
     *,
     source: dict[str, str] | None = None,
 ) -> int:
-    """Convert + publish an image backdrop to one dial as chunked cmd/image.
-
-    Runs the CPU-bound PIL/RGB565 work in HA's executor so the event
-    loop is never blocked, then publishes ``start`` → ``chunk``×N →
-    ``done``. Returns the number of chunks sent.
+    """Publish ``start`` → ``chunk``×N → ``done`` for one dial.
 
     Assumes the caller has already published ``cmd/announce`` with
     ``"image": true`` so the dial suppresses theme animation while it
@@ -128,9 +169,6 @@ async def publish_image_to_dial(
     """
     from homeassistant.components import mqtt
 
-    rgb565 = await hass.async_add_executor_job(rgb565_from_bytes, source_bytes, size)
-    chunks = rgb565_to_chunks(rgb565)
-
     topic = TOPIC_CMD_IMAGE.format(team_id=team_id, dial_id=dial_id)
 
     await mqtt.async_publish(
@@ -139,10 +177,10 @@ async def publish_image_to_dial(
         dumps_with_source(
             {
                 "action": "start",
-                "w": size,
-                "h": size,
-                "size": len(rgb565),
-                "chunks": len(chunks),
+                "w": image.size,
+                "h": image.size,
+                "size": image.nbytes,
+                "chunks": len(image.chunks),
             },
             source,
         ),
@@ -150,9 +188,9 @@ async def publish_image_to_dial(
 
     # The firmware handles a fast burst (Helm sends ~50 chunks in ~1.5 s
     # with a 5 ms per-chunk sleep). We yield to the loop between chunks so
-    # the ~51 publishes don't starve other HA work; the QoS-0 broker
-    # fan-out has breathing room without an explicit sleep.
-    for i, chunk_b64 in enumerate(chunks):
+    # the ~51 publishes don't starve other HA work — and so a room's dials
+    # streaming concurrently take turns rather than one waiting on another.
+    for i, chunk_b64 in enumerate(image.chunks):
         await mqtt.async_publish(
             hass,
             topic,
@@ -164,10 +202,29 @@ async def publish_image_to_dial(
 
     _LOGGER.info(
         "Pushed %d-byte RGB565 image (%dx%d, %d chunks) to dial %s",
-        len(rgb565),
-        size,
-        size,
-        len(chunks),
+        image.nbytes,
+        image.size,
+        image.size,
+        len(image.chunks),
         dial_id,
     )
-    return len(chunks)
+    return len(image.chunks)
+
+
+async def publish_image_to_dial(
+    hass,
+    team_id: str,
+    dial_id: str,
+    source_bytes: bytes,
+    size: int = IMAGE_DEFAULT_SIZE,
+    *,
+    source: dict[str, str] | None = None,
+) -> int:
+    """Convert + publish an image backdrop to one dial as chunked cmd/image.
+
+    Single-dial convenience over ``prepare_image`` + ``publish_prepared_image``;
+    a multi-dial send should prepare once and publish the result to each.
+    Returns the number of chunks sent.
+    """
+    image = await hass.async_add_executor_job(prepare_image, source_bytes, size)
+    return await publish_prepared_image(hass, team_id, dial_id, image, source=source)

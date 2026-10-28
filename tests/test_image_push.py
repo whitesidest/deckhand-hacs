@@ -94,6 +94,46 @@ class Rgb565ConversionTests(unittest.TestCase):
         self.assertEqual(first, 0xF800)
 
 
+@unittest.skipUnless(image_push._PIL_AVAILABLE, "Pillow not available")
+class FastPackTests(unittest.TestCase):
+    """The numpy pack must be bit-identical to the per-pixel loop it
+    replaced — the firmware has no tolerance for a shifted channel."""
+
+    def _noisy_rgb(self, size=64):
+        from PIL import Image
+
+        return Image.effect_noise((size, size), 80).convert("RGB").resize((size, size))
+
+    @unittest.skipIf(image_push._np is None, "numpy not available")
+    def test_numpy_pack_matches_the_loop_bit_for_bit(self):
+        img = self._noisy_rgb()
+        fast = image_push._pack_rgb565(img, 64)
+        saved = image_push._np
+        image_push._np = None
+        try:
+            slow = image_push._pack_rgb565(img, 64)
+        finally:
+            image_push._np = saved
+        self.assertEqual(fast, slow)
+
+    def test_a_large_jpeg_still_lands_at_the_target_size(self):
+        """``draft`` scales the JPEG decode, never below the target."""
+        from PIL import Image
+        import io
+
+        buf = io.BytesIO()
+        Image.new("RGB", (1920, 1080), (0, 0, 255)).save(buf, format="JPEG")
+        data = image_push.rgb565_from_bytes(buf.getvalue(), size=360)
+        self.assertEqual(len(data), 360 * 360 * 2)
+        # Pure blue survives decode+resize as 0x001F.
+        self.assertEqual(struct.unpack_from("<H", data, 360 * 180 + 180)[0], 0x001F)
+
+    def test_prepare_image_chunks_once(self):
+        prepared = image_push.prepare_image(_make_test_jpeg(), size=360)
+        self.assertEqual(prepared.nbytes, 360 * 360 * 2)
+        self.assertEqual(len(prepared.chunks), 51)
+
+
 class _RecordingMqtt:
     """Stub for ``homeassistant.components.mqtt`` that records publishes."""
 
