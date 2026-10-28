@@ -329,6 +329,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         label = store.get("labels", {}).get(dial_id)
         if label:
             enriched["_label"] = label
+        room = _dial_room_name(store, dial_id)
+        if room:
+            enriched["_room"] = room
         store["dials"][dial_id] = enriched
 
         if is_new:
@@ -702,6 +705,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
                 _LOGGER.warning("Invalid JSON on %s", msg.topic)
                 return
             bindings = perimeter_fed_bindings(payload, PERIMETER_LIVE_STATE_KEY)
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if store is not None:
+            # For diagnostics: is a ring mount retained for this dial right
+            # now, live-fed or not (an empty retained payload is the clear).
+            store.setdefault("_perimeter_mounted", {})[dial_id] = bool(msg.payload)
         _set_perimeter_feed(hass, entry, dial_id, team_id, bindings)
 
     entry.async_on_unload(
@@ -868,6 +876,19 @@ def _normalize_groups(groups: list) -> dict[str, dict[str, Any]]:
     return normalized
 
 
+def _dial_room_name(store: dict[str, Any], dial_id: str) -> str | None:
+    """The name of the one Room this dial belongs to, else None.
+
+    A dial in two Rooms has no single area to suggest, so it gets none.
+    """
+    names = [
+        g["name"]
+        for g in (store.get("groups") or {}).values()
+        if dial_id in g.get("dial_ids", [])
+    ]
+    return names[0] if len(names) == 1 else None
+
+
 @callback
 def _register_device(
     hass: HomeAssistant,
@@ -888,20 +909,6 @@ def _register_device(
     label = store.get("labels", {}).get(dial_id)
     name = f"{label} ({dial_id})" if label else f"Deckhand {dial_id}"
 
-    # Only build a configuration_url when the IP looks like a valid
-    # address. A hostile publisher with MQTT access could otherwise
-    # set `ip` to an arbitrary string that becomes a clickable link
-    # in the HA devices UI.
-    import ipaddress
-
-    raw_ip = str(data.get("ip") or "").strip()
-    configuration_url = None
-    try:
-        ipaddress.ip_address(raw_ip)
-        configuration_url = f"http://{raw_ip}"
-    except ValueError:
-        configuration_url = None
-
     registry = dr.async_get(hass)
     kwargs: dict[str, Any] = {
         "config_entry_id": entry.entry_id,
@@ -910,9 +917,19 @@ def _register_device(
         "name": name,
         "model": model,
         "sw_version": data.get("fw_ver"),
+        # This used to link http://<dial LAN IP>. The dial serves no page
+        # there (its only web server is the Wi-Fi setup portal on its own
+        # access point), and a LAN address is never a link to hand a
+        # person. None also clears the dead link from existing devices.
+        # There is no public https Helm/Console URL known here to use.
+        "configuration_url": None,
     }
-    if configuration_url:
-        kwargs["configuration_url"] = configuration_url
+    if hw_type and hw_type != "unknown":
+        kwargs["hw_version"] = str(hw_type)
+    room = _dial_room_name(store, dial_id)
+    if room:
+        # Only applied when Home Assistant first creates the device.
+        kwargs["suggested_area"] = room
     registry.async_get_or_create(**kwargs)
 
 

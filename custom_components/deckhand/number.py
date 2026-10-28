@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from ._source import dumps_with_source
 from .const import DOMAIN, TOPIC_CMD_OVERLAY
@@ -47,10 +48,32 @@ async def async_setup_entry(
         _async_discover_dial(dial_id, data)
 
 
-class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
+def brightness_from_status(data: dict[str, Any]) -> float | None:
+    """What the slider should show for one heartbeat, or None if unknown.
+
+    The slider sets the dial's night-dim cap (see async_set_native_value),
+    and the heartbeat reports that cap as ``brightness_cap`` (firmware newer
+    than 0.4.169): 0-99 is the cap, ``null`` means none, which is the
+    slider at 100. A heartbeat without the key (older firmware, or a dial
+    that has never recorded a cap) says nothing about the slider.
+
+    ``brightness_pct`` is NOT this value: it is the backlight right now,
+    which drops whenever the dial idles into its dim level.
+    """
+    if "brightness_cap" not in data:
+        return None
+    cap = data["brightness_cap"]
+    if cap is None:
+        return 100.0
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+        return None
+    return float(max(0, min(100, cap)))
+
+
+class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity, RestoreEntity):
     """Number entity for controlling dial display brightness."""
 
-    _attr_name = "Brightness"
+    _attr_translation_key = "brightness"
     _attr_icon = "mdi:brightness-6"
     _attr_native_min_value = 0
     _attr_native_max_value = 100
@@ -65,7 +88,30 @@ class DeckhandBrightnessNumber(DeckhandEntity, NumberEntity):
         super().__init__(dial_id, data)
         self._entry = entry
         self._attr_unique_id = f"deckhand_{dial_id}_brightness"
-        self._attr_native_value = 80.0  # Reasonable default (0-100 scale)
+        # What the dial reports, else unknown until async_added_to_hass
+        # restores the last value. It used to start at a made-up 80.
+        self._attr_native_value = brightness_from_status(data)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last value when the dial doesn't report its cap."""
+        await super().async_added_to_hass()
+        if self._attr_native_value is not None:
+            return
+        last = await self.async_get_last_state()
+        if last is None:
+            return
+        try:
+            self._attr_native_value = float(last.state)
+        except (TypeError, ValueError):
+            # "unknown" / "unavailable": stay unknown.
+            pass
+
+    def _on_status(self, data: dict[str, Any]) -> None:
+        """Follow the cap the dial reports (the base class does the listening)."""
+        value = brightness_from_status(data)
+        if value is not None:
+            self._attr_native_value = value
+        super()._on_status(data)
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the brightness value — publishes a theme-brightness overlay.

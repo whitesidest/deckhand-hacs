@@ -63,6 +63,65 @@
       "unknown_dial": "The selected device is not a Deckhand dial on this integration."
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "connectivity": {
+        "name": "Connectivity"
+      },
+      "do_not_disturb": {
+        "name": "Do Not Disturb"
+      }
+    },
+    "button": {
+      "reboot": {
+        "name": "Reboot"
+      }
+    },
+    "event": {
+      "timer": {
+        "name": "Timer",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "started": "Started",
+              "completed": "Completed",
+              "cancelled": "Cancelled"
+            }
+          }
+        }
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brightness"
+      }
+    },
+    "select": {
+      "theme": {
+        "name": "Theme"
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      },
+      "wifi_signal": {
+        "name": "WiFi Signal"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "ambient_light": {
+        "name": "Ambient Light"
+      },
+      "theme": {
+        "name": "Theme"
+      }
+    }
+  },
   "exceptions": {
     "unknown_device": {
       "message": "The selected device is not a known Deckhand dial."

@@ -144,9 +144,15 @@ class BlueprintLintTests(unittest.TestCase):
     def test_no_stray_files_in_blueprint_dir(self):
         # Anything unexpected here ships to every HACS user. Non-NFC
         # blueprints added deliberately get listed here AND linted in
-        # their own test module (dnd_hold_calls → tests/test_dnd.py).
+        # their own test module (dnd_hold_calls → tests/test_dnd.py; the
+        # 1.24.0 three → tests/test_blueprints.py).
         actual = {p.name for p in BLUEPRINT_DIR.iterdir()}
-        self.assertEqual(actual, set(BLUEPRINT_ACTIONS) | {"dnd_hold_calls.yaml"})
+        self.assertEqual(actual, set(BLUEPRINT_ACTIONS) | {
+            "dnd_hold_calls.yaml",
+            "doorbell_snapshot_announcement.yaml",
+            "door_open_ring_flash.yaml",
+            "laundry_done_menu_item.yaml",
+        })
 
     def test_blueprints_parse_with_metadata(self):
         for name in BLUEPRINT_ACTIONS:

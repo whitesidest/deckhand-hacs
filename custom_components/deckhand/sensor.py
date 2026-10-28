@@ -30,7 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     {
         "key": "battery_pct",
-        "name": "Battery",
+        "translation_key": "battery",
         "device_class": SensorDeviceClass.BATTERY,
         "state_class": SensorStateClass.MEASUREMENT,
         "unit": PERCENTAGE,
@@ -39,7 +39,7 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "rssi",
-        "name": "WiFi Signal",
+        "translation_key": "wifi_signal",
         "device_class": SensorDeviceClass.SIGNAL_STRENGTH,
         "state_class": SensorStateClass.MEASUREMENT,
         "unit": SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
@@ -48,7 +48,7 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "temperature_c",
-        "name": "Temperature",
+        "translation_key": "temperature",
         "device_class": SensorDeviceClass.TEMPERATURE,
         "state_class": SensorStateClass.MEASUREMENT,
         "unit": UnitOfTemperature.CELSIUS,
@@ -58,7 +58,7 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "humidity_pct",
-        "name": "Humidity",
+        "translation_key": "humidity",
         "device_class": SensorDeviceClass.HUMIDITY,
         "state_class": SensorStateClass.MEASUREMENT,
         "unit": PERCENTAGE,
@@ -68,7 +68,7 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "ambient_lux",
-        "name": "Ambient Light",
+        "translation_key": "ambient_light",
         "device_class": SensorDeviceClass.ILLUMINANCE,
         "state_class": SensorStateClass.MEASUREMENT,
         "unit": LIGHT_LUX,
@@ -78,12 +78,14 @@ SENSOR_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "key": "current_theme",
-        "name": "Theme",
+        "translation_key": "theme",
         "device_class": None,
         "state_class": None,
         "unit": None,
         "icon": "mdi:palette",
-        "entity_category": None,
+        # The Theme select shows (and changes) the same value; this read-only
+        # copy stays for history and existing automations, out of the way.
+        "entity_category": EntityCategory.DIAGNOSTIC,
     },
 ]
 
@@ -139,7 +141,9 @@ class DeckhandSensor(DeckhandEntity, SensorEntity):
         self._key = definition["key"]
 
         self._attr_unique_id = f"deckhand_{dial_id}_{self._key}"
-        self._attr_name = definition["name"]
+        # Named from translations (strings.json "entity"), whose English
+        # matches the old fixed names, so names and entity_ids are unchanged.
+        self._attr_translation_key = definition["translation_key"]
         self._attr_device_class = definition["device_class"]
         self._attr_state_class = definition["state_class"]
         self._attr_native_unit_of_measurement = definition["unit"]

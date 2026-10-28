@@ -66,6 +66,18 @@ class _Entity:
         self.writes = getattr(self, "writes", 0) + 1
 
 
+class _RestoreEntity:
+    """Just enough of homeassistant.helpers.restore_state.RestoreEntity.
+
+    A test sets ``_last_state`` to what Home Assistant restored.
+    """
+
+    _last_state = None
+
+    async def async_get_last_state(self):
+        return self._last_state
+
+
 class _Bus:
     def __init__(self):
         self.listeners: dict[str, list] = {}
@@ -106,6 +118,8 @@ class _HAFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         elif name == "homeassistant.helpers.entity":
             module.Entity = _Entity
             module.DeviceInfo = lambda **kwargs: kwargs
+        elif name == "homeassistant.helpers.restore_state":
+            module.RestoreEntity = _RestoreEntity
 
 
 def _load_platforms():
@@ -116,6 +130,9 @@ def _load_platforms():
     pkg = types.ModuleType(PKG)
     pkg.__path__ = [str(PKG_DIR)]
     sys.modules[PKG] = pkg
+    # Whichever stand-in created the module first, the Brightness number
+    # needs a RestoreEntity that can answer async_get_last_state.
+    importlib.import_module("homeassistant.helpers.restore_state").RestoreEntity = _RestoreEntity
     return {
         name: importlib.import_module(f"{PKG}.{name}")
         for name in ("entity", "button", "number", "sensor", "binary_sensor", "select")
