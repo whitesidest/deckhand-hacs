@@ -41,9 +41,9 @@ class AnnouncementImageFanoutTests(unittest.TestCase):
         async def _fetch(hass, snapshot_entity, image_url):
             return fetched
 
-        def _prepare(image_bytes):
+        def _prepare(image_bytes, variants):
             prepared.append(image_bytes)
-            return "PREPARED"
+            return {v: "PREPARED" for v in variants}
 
         async def _executor(func, *args):
             return func(*args)
@@ -56,7 +56,7 @@ class AnnouncementImageFanoutTests(unittest.TestCase):
 
         self._harness.harness_overrides = {
             "_fetch_announcement_image": _fetch,
-            "prepare_image": prepare or _prepare,
+            "prepare_variants": prepare or _prepare,
             "publish_prepared_image": push or _push,
             "async_add_executor_job": _executor,
         }
@@ -112,7 +112,7 @@ class AnnouncementImageFanoutTests(unittest.TestCase):
         self.assertEqual(done, ["DECK-BBBB"])
 
     def test_an_undecodable_picture_still_sends_the_text(self):
-        def _bad(image_bytes):
+        def _bad(image_bytes, variants):
             raise OSError("cannot identify image file")
 
         log, pubs = self._run(prepare=_bad)

@@ -637,7 +637,14 @@ class QuietInvitationTests(unittest.TestCase):
             "_resolve_targets": lambda hass, device_id: list(targets),
             "_resolve_all_dials": lambda hass: list(targets),
             "_fetch_announcement_image": _no_image,
-            "prepare_image": lambda image_bytes: image_bytes,
+            # 1.23.0 — per-dial image variant (raw RGB565 vs JPEG). These
+            # defaults keep every dial on raw; test_announcement_image_fanout
+            # swaps in the real chooser and heartbeats.
+            "_dial_heartbeat": lambda hass, dial_id, team_id: None,
+            "image_variant_for": lambda status: ("raw", 360),
+            "prepare_variants": lambda image_bytes, variants: {
+                v: image_bytes for v in variants
+            },
             "publish_prepared_image": _noop_image_push,
             "asyncio": asyncio,
             "HomeAssistant": object,

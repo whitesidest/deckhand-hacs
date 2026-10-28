@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.22.3"  # 1.22.3 = a doorbell picture is converted once per send and streamed to every dial at once, after every dial is announced
+    EXPECTED_VERSION = "1.23.0"  # 1.23.0 = dials advertising "img_jpeg" (firmware 0.4.220) get the doorbell picture as a baseline JPEG, 466 on the AMOLED; every other dial keeps raw RGB565 360 byte-for-byte
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
