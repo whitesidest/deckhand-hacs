@@ -70,6 +70,9 @@
       },
       "do_not_disturb": {
         "name": "Do Not Disturb"
+      },
+      "ring": {
+        "name": "Ring"
       }
     },
     "button": {
@@ -119,6 +122,9 @@
       },
       "theme": {
         "name": "Theme"
+      },
+      "showing": {
+        "name": "Showing"
       }
     }
   },

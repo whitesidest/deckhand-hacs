@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import _faces
 from .const import DOMAIN, HEARTBEAT_TIMEOUT
 from .entity import DeckhandEntity
 
@@ -39,6 +40,7 @@ async def async_setup_entry(
             [
                 DeckhandConnectivitySensor(dial_id, data),
                 DeckhandDndSensor(dial_id, data),
+                DeckhandRingSensor(dial_id, data),
             ]
         )
         _LOGGER.debug("Added connectivity + DND sensors for %s", dial_id)
@@ -134,5 +136,31 @@ class DeckhandDndSensor(DeckhandEntity, BinarySensorEntity):
         docstring).
         """
         if "dnd" not in self._dial_data:
+            return False
+        return super().available
+
+
+class DeckhandRingSensor(DeckhandEntity, BinarySensorEntity):
+    """Whether the Perimeter Ring overlay is mounted, as the dial reports it.
+
+    From the heartbeat's ``ring`` flag (firmware ``face_report``). Like
+    Do Not Disturb, unavailable on firmware that doesn't report it rather
+    than a confident ``off``.
+    """
+
+    _attr_translation_key = "ring"
+    _attr_icon = "mdi:circle-double"
+
+    def __init__(self, dial_id: str, data: dict[str, Any]) -> None:
+        super().__init__(dial_id, data)
+        self._attr_unique_id = f"deckhand_{dial_id}_ring"
+
+    @property
+    def is_on(self) -> bool | None:
+        return _faces.ring_report(self._dial_data)
+
+    @property
+    def available(self) -> bool:
+        if _faces.ring_report(self._dial_data) is None:
             return False
         return super().available

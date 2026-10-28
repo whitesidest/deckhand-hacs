@@ -6,12 +6,13 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError, Unauthorized
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import (
@@ -35,6 +36,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
     FACE_ID_ALIASES,
+    FACE_REQUEST_TIMEOUT_S,
     HARDWARE_MODELS,
     MEDIA_PLAYER_DEBOUNCE_S,
     PERIMETER_DEFAULT_ACTIVE_STATE,
@@ -49,6 +51,7 @@ from .const import (
     PERIMETER_TREATMENT_ALIASES,
     PERIMETER_TREATMENTS,
     PLATFORMS,
+    SIGNAL_FACES_UPDATED,
     TOPIC_CMD_ANNOUNCE,
     TOPIC_CMD_FACE_CONFIG,
     TOPIC_CMD_FACE_MOUNT,
@@ -67,6 +70,10 @@ from .const import (
     TOPIC_CMD_SENSOR_VALUE,
     TOPIC_CMD_TIMER,
     TOPIC_CMD_SUNSET,
+    TOPIC_FACES_ITEMS,
+    TOPIC_FACES_LIST,
+    TOPIC_FACES_REQUEST,
+    TOPIC_FACES_RESULT,
     TOPIC_HACS_PRESENCE,
     TOPIC_PERIMETER_MOUNTS,
     TOPIC_SENSOR_WATCHES,
@@ -79,6 +86,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import image_variant_for, prepare_variants, publish_prepared_image
 from ._source import async_source_for, dumps_with_source
+from . import _faces
 from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard, is_internal_request
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
@@ -278,6 +286,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # each dial's Perimeter Ring layer, armed from its retained mount
         # (_set_perimeter_feed).
         "_perimeter_feeds": {},
+        # The team's face library from the face sync plane (_faces.py):
+        # index (None until faces/list arrives = face sync unavailable),
+        # cached items, and the futures face services await by request_id.
+        "faces": _new_faces_store(),
     }
 
     # The dial GETs album art from us (baseline JPEG, dial-sized) rather
@@ -538,6 +550,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
     entry.async_on_unload(
         await mqtt.async_subscribe(hass, groups_topic, _handle_groups_list, qos=0)
     )
+
+    # Face sync plane (docs/face_sync_contract.md): the team's face library
+    # (retained index + one retained record per face) and the one-per-request
+    # results the face services wait for. QoS 1 like the servers publish.
+    @callback
+    def _handle_faces_message(msg: mqtt.ReceiveMessage) -> None:
+        store = hass.data[DOMAIN].get(entry.entry_id)
+        if not store:
+            return
+        topic = msg.topic
+        if topic.endswith("/faces/list"):
+            _handle_faces_list(hass, store, msg.payload)
+        elif topic.endswith("/faces/result"):
+            _handle_face_result(store, msg.payload)
+        else:
+            _handle_face_item(hass, store, topic, msg.payload)
+
+    for faces_topic in (
+        TOPIC_FACES_LIST.format(team_id=team_id),
+        TOPIC_FACES_ITEMS.format(team_id=team_id),
+        TOPIC_FACES_RESULT.format(team_id=team_id),
+    ):
+        entry.async_on_unload(
+            await mqtt.async_subscribe(hass, faces_topic, _handle_faces_message, qos=1)
+        )
 
     # Subscribe to events for automation triggers
     event_topic = f"deckhand/{team_id}/dial/+/event"
@@ -806,6 +843,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) ->
             unsub = feed.get("unsub")
             if unsub:
                 unsub()
+        for future in ((store or {}).get("faces") or {}).get("pending", {}).values():
+            if not future.done():
+                future.cancel()
     return unload_ok
 
 
@@ -3642,6 +3682,195 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             invitation_id, len(targets),
         )
 
+    # ── Face library (face sync plane) ──────────────────────────────
+    # Writes go to Helm / Console on faces/request; each call waits for its
+    # faces/result and returns it (SupportsResponse.OPTIONAL). A refusal is
+    # raised with the server's own sentence. The ``face`` field takes a uid
+    # or a face's exact name (services.yaml has no dynamic picker).
+
+    async def _create_face(call) -> dict[str, Any]:
+        await _require_admin(call)
+        data = call.data
+        store = _pick_library_store(hass, data.get("config_entry_id"))
+        index = _face_library(store)
+        face = _face_fields(data)
+        if not face.get("name"):
+            raise ServiceValidationError("A face name is required.")
+        if not face.get("kind"):
+            raise ServiceValidationError("A face kind is required.")
+        face.setdefault("payload", {})
+        _prevalidate_face(face, index)
+        request = _faces.build_request("create", face=face, src=await _call_source(call))
+        result = await async_face_request(hass, store, request)
+        _raise_for_face_result(result, index)
+        return result
+
+    def _library_face_for_write(call) -> tuple[dict[str, Any], dict[str, Any], int]:
+        """(store, index entry, base_rev) for an update / delete."""
+        data = call.data
+        store = _pick_library_store(hass, data.get("config_entry_id"), data.get("face"))
+        found = _resolve_library_face(store, data.get("face"))
+        if found.get("system"):
+            raise ServiceValidationError(
+                f"'{found['name']}' is a system face and can't be changed. "
+                "Create a new face from it instead."
+            )
+        base_rev = data.get("base_rev")
+        if base_rev in (None, ""):
+            base_rev = found.get("rev")
+        if base_rev is None:
+            raise ServiceValidationError(
+                "That face isn't in the library index yet, so its current rev is "
+                "unknown. Pass base_rev."
+            )
+        try:
+            base_rev = int(base_rev)
+        except (TypeError, ValueError):
+            raise ServiceValidationError("base_rev must be a whole number.") from None
+        return store, found, base_rev
+
+    async def _update_face(call) -> dict[str, Any]:
+        await _require_admin(call)
+        store, found, base_rev = _library_face_for_write(call)
+        index = _face_library(store)
+        patch = _face_fields(call.data)
+        if not patch:
+            raise ServiceValidationError(
+                "Nothing to change: set at least one of name, kind, description, "
+                "enabled or payload."
+            )
+        _prevalidate_face(patch, index)
+        request = _faces.build_request(
+            "update", uid=found["uid"], base_rev=base_rev, face=patch,
+            src=await _call_source(call),
+        )
+        result = await async_face_request(hass, store, request)
+        _raise_for_face_result(result, index)
+        return result
+
+    async def _delete_face(call) -> dict[str, Any]:
+        await _require_admin(call)
+        store, found, base_rev = _library_face_for_write(call)
+        index = _face_library(store)
+        request = _faces.build_request(
+            "delete", uid=found["uid"], base_rev=base_rev, src=await _call_source(call),
+        )
+        result = await async_face_request(hass, store, request)
+        _raise_for_face_result(result, index)
+        return result
+
+    async def _dial_face_requests(call, action: str, build) -> dict[str, Any]:
+        """Send one request per team (and per 32 dials) and merge the answers.
+
+        ``build(store, index, dial_ids)`` returns the request kwargs for one
+        batch. Every batch is sent before the first refusal is raised, so a
+        mixed-team call does what it can.
+        """
+        src = await _call_source(call)
+        results: list[dict[str, Any]] = []
+        failure: dict[str, Any] | None = None
+        failure_index: dict[str, Any] = {}
+        prepared = []
+        for team_id, dial_ids in _face_targets_by_team(hass, call.data.get("device_id")).items():
+            store = _face_store_for_team(hass, team_id)
+            index = _face_library(store)
+            for chunk in _dial_chunks(dial_ids):
+                prepared.append((store, index, build(store, index, chunk)))
+        for store, index, kwargs in prepared:
+            request = _faces.build_request(action, src=src, **kwargs)
+            result = await async_face_request(hass, store, request)
+            results.append(result)
+            if not result.get("ok") and failure is None:
+                failure, failure_index = result, index
+        if failure is not None:
+            _raise_for_face_result(failure, failure_index)
+        return _merge_face_results(results)
+
+    async def _mount_library_face(call) -> dict[str, Any]:
+        await _require_admin(call)
+        overrides = call.data.get("overrides")
+        overrides = _face_payload_arg(overrides, "overrides") if overrides is not None else None
+
+        def _build(store, index, dial_ids):
+            found = _resolve_library_face(store, call.data.get("face"))
+            return {"uid": found["uid"], "dial_ids": dial_ids, "overrides": overrides}
+
+        return await _dial_face_requests(call, "mount", _build)
+
+    async def _test_face(call) -> dict[str, Any]:
+        await _require_admin(call)
+        data = call.data
+        face_ref = data.get("face")
+        unsaved = _face_fields({k: data.get(k) for k in ("kind", "payload")})
+        if face_ref and unsaved:
+            raise ServiceValidationError(
+                "Test either a library face (face) or an unsaved one (kind + payload), not both."
+            )
+        if not face_ref and not unsaved.get("kind"):
+            raise ServiceValidationError(
+                "Pick a library face to test, or give the kind (and payload) of an unsaved one."
+            )
+        overrides = data.get("overrides")
+        overrides = _face_payload_arg(overrides, "overrides") if overrides is not None else None
+        try:
+            ttl_s = _faces.check_ttl(data.get("ttl_s"))
+        except _faces.FaceSyncError as exc:
+            raise ServiceValidationError(str(exc)) from None
+        test_id = str(data.get("test_id") or "").strip()[:64] or uuid.uuid4().hex
+        kinds: list[str] = []
+
+        def _build(store, index, dial_ids):
+            kwargs: dict[str, Any] = {
+                "dial_ids": dial_ids, "test_id": test_id, "ttl_s": ttl_s,
+            }
+            if face_ref:
+                found = _resolve_library_face(store, face_ref)
+                kwargs["uid"] = found["uid"]
+                if overrides is not None:
+                    kwargs["overrides"] = overrides
+                if found.get("kind"):
+                    kinds.append(found["kind"])
+            else:
+                face = {"kind": unsaved["kind"], "payload": unsaved.get("payload", {})}
+                _prevalidate_face(face, index)
+                kwargs["face"] = face
+                kinds.append(face["kind"])
+            # Remember what was tested so clear_face_test can name the kind
+            # even if the server has forgotten the test (a restart).
+            tests = store["faces"]["tests"]
+            tests[test_id] = {"kind": kinds[-1] if kinds else None}
+            while len(tests) > _FACE_TESTS_CAP:
+                tests.pop(next(iter(tests)))
+            return kwargs
+
+        return await _dial_face_requests(call, "test", _build)
+
+    async def _clear_face_test(call) -> dict[str, Any]:
+        await _require_admin(call)
+        data = call.data
+        test_id = str(data.get("test_id") or "").strip()[:64] or None
+        kind = str(data.get("kind") or "").strip() or None
+        if not test_id and not kind:
+            raise ServiceValidationError(
+                "Pass the test_id test_face returned, or the kind of face under test."
+            )
+
+        def _build(store, index, dial_ids):
+            known = store["faces"]["tests"].get(test_id) if test_id else None
+            face_kind = kind or (known or {}).get("kind")
+            kwargs: dict[str, Any] = {"dial_ids": dial_ids}
+            if test_id:
+                kwargs["test_id"] = test_id
+            if face_kind:
+                kwargs["face"] = {"kind": face_kind}
+            return kwargs
+
+        result = await _dial_face_requests(call, "clear_test", _build)
+        if test_id:
+            for store in _face_stores(hass):
+                store["faces"]["tests"].pop(test_id, None)
+        return result
+
     # Only register once
     if not hass.services.has_service(DOMAIN, "push_theme"):
         hass.services.async_register(DOMAIN, "push_theme", _push_theme)
@@ -3718,6 +3947,18 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "send_invitation", _send_invitation)
     if not hass.services.has_service(DOMAIN, "cancel_invitation"):
         hass.services.async_register(DOMAIN, "cancel_invitation", _cancel_invitation)
+    for _svc, _fn in (
+        ("create_face", _create_face),
+        ("update_face", _update_face),
+        ("delete_face", _delete_face),
+        ("mount_library_face", _mount_library_face),
+        ("test_face", _test_face),
+        ("clear_face_test", _clear_face_test),
+    ):
+        if not hass.services.has_service(DOMAIN, _svc):
+            hass.services.async_register(
+                DOMAIN, _svc, _fn, supports_response=SupportsResponse.OPTIONAL
+            )
 
 
 def _coerce_epoch(value: Any) -> int | None:
@@ -3771,6 +4012,286 @@ def _sunset_epoch_from_entity(
     if raw in (None, "", "unknown", "unavailable"):
         return None
     return _coerce_epoch(raw)
+
+
+# ── Face sync plane (docs/face_sync_contract.md) ─────────────────────
+#
+# Helm / Console publish the team's face library retained on faces/list
+# (index) + faces/item/{uid} (records); HACS caches both per entry in
+# store["faces"] and writes through faces/request, waiting for the one
+# faces/result that carries its request_id. Parsing and rules live in the
+# pure _faces module; this is the Home Assistant glue.
+
+# Bound on cached records: the index cap plus room for records that arrive
+# just ahead of the index that lists them.
+_FACE_ITEMS_CAP = _faces.INDEX_CAP + 64
+# test_face ids this entry started, remembered so clear_face_test can name
+# the tested kind even after the server forgot the test.
+_FACE_TESTS_CAP = 64
+
+
+def _new_faces_store() -> dict[str, Any]:
+    return {"index": None, "items": {}, "pending": {}, "tests": {}}
+
+
+def _faces_changed(hass: HomeAssistant) -> None:
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    async_dispatcher_send(hass, SIGNAL_FACES_UPDATED)
+
+
+def _handle_faces_list(hass: HomeAssistant, store: dict[str, Any], payload: Any) -> None:
+    """A ``faces/list`` message: replace the index, drop orphaned records."""
+    faces = store.setdefault("faces", _new_faces_store())
+    if not payload:
+        # An empty retained clear: the server stopped publishing this team's
+        # library (moved to Console, or rolled back). Face sync is
+        # unavailable until an index arrives again.
+        faces["index"] = None
+        faces["items"].clear()
+        _faces_changed(hass)
+        return
+    index = _faces.normalize_index(payload)
+    if index is None:
+        _LOGGER.warning("Ignoring a malformed face index for team %s", store.get("team_id"))
+        return
+    faces["index"] = index
+    # Records arrive before the index that lists them (the servers publish
+    # items first), so a record the NEW index does not list is an orphan.
+    for uid in [u for u in faces["items"] if u not in index["by_uid"]]:
+        faces["items"].pop(uid, None)
+    _faces_changed(hass)
+    _LOGGER.debug(
+        "Face library for team %s: %d faces from %s",
+        store.get("team_id"), len(index["faces"]), index.get("server"),
+    )
+
+
+def _handle_face_item(
+    hass: HomeAssistant, store: dict[str, Any], topic: str, payload: Any
+) -> None:
+    """A ``faces/item/{uid}`` message: cache the record, or forget it on
+    the empty retained clear."""
+    uid = _faces.item_uid_from_topic(topic)
+    if uid is None:
+        return
+    faces = store.setdefault("faces", _new_faces_store())
+    items = faces["items"]
+    if not payload:
+        if items.pop(uid, None) is not None:
+            _faces_changed(hass)
+        return
+    index = faces.get("index")
+    cap = index["max_payload_bytes"] if index else _faces.DEFAULT_MAX_PAYLOAD_BYTES
+    item = _faces.normalize_item(payload, uid, cap)
+    if item is None:
+        _LOGGER.warning("Ignoring a malformed or oversize face record on %s", topic)
+        return
+    if uid not in items and len(items) >= _FACE_ITEMS_CAP:
+        _LOGGER.warning("Face record cache is full; ignoring %s", topic)
+        return
+    items[uid] = item
+    _faces_changed(hass)
+
+
+def _handle_face_result(store: dict[str, Any], payload: Any) -> None:
+    """A ``faces/result``: wake the service call waiting on its request_id.
+    Results for requests this entry did not send (another HA, a retry
+    after timeout) are ignored."""
+    result = _faces.normalize_result(payload)
+    if result is None:
+        return
+    future = ((store.get("faces") or {}).get("pending") or {}).get(result["request_id"])
+    if future is None or future.done():
+        return
+    future.set_result(result)
+
+
+def _face_library(store: dict[str, Any]) -> dict[str, Any]:
+    """The entry's face index, or ServiceValidationError when face sync is
+    unavailable (no faces/list has arrived: the server predates the plane)."""
+    index = (store.get("faces") or {}).get("index")
+    if index is None:
+        raise ServiceValidationError(_faces.unavailable_message(store.get("team_id")))
+    return index
+
+
+async def async_face_request(
+    hass: HomeAssistant, store: dict[str, Any], request: dict[str, Any]
+) -> dict[str, Any]:
+    """Publish one ``faces/request`` and return its ``faces/result``.
+
+    Waits FACE_REQUEST_TIMEOUT_S; no answer in time means the server is
+    too old, its listener isn't subscribed, or the broker ACL doesn't let
+    this login publish the request (contract §7).
+    """
+    index = _face_library(store)
+    faces = store["faces"]
+    request_id = request["request_id"]
+    future = asyncio.get_running_loop().create_future()
+    faces["pending"][request_id] = future
+    try:
+        await mqtt.async_publish(
+            hass,
+            TOPIC_FACES_REQUEST.format(team_id=store["team_id"]),
+            json.dumps(request),
+            qos=1,
+            retain=False,
+        )
+        try:
+            return await asyncio.wait_for(future, FACE_REQUEST_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise ServiceValidationError(
+                _faces.timeout_message(index.get("server"), FACE_REQUEST_TIMEOUT_S)
+            ) from None
+    finally:
+        faces["pending"].pop(request_id, None)
+
+
+def _face_stores(hass: HomeAssistant) -> list[dict[str, Any]]:
+    return [
+        s
+        for s in hass.data.get(DOMAIN, {}).values()
+        if isinstance(s, dict) and isinstance(s.get("faces"), dict)
+    ]
+
+
+def _face_store_for_team(hass: HomeAssistant, team_id: str) -> dict[str, Any]:
+    for store in _face_stores(hass):
+        if str(store.get("team_id")) == str(team_id):
+            return store
+    raise ServiceValidationError(_faces.unavailable_message(team_id))
+
+
+def _pick_library_store(
+    hass: HomeAssistant, config_entry_id: Any, face_ref: Any = None
+) -> dict[str, Any]:
+    """Whose face library a create / update / delete goes to.
+
+    ``config_entry_id`` when given; else the only team whose library has
+    arrived; else, with several, the one team whose library holds
+    ``face_ref``.
+    """
+    if config_entry_id:
+        store = hass.data.get(DOMAIN, {}).get(config_entry_id)
+        if not isinstance(store, dict) or not isinstance(store.get("faces"), dict):
+            raise ServiceValidationError(
+                "That config entry is not a loaded Deckhand integration."
+            )
+        _face_library(store)
+        return store
+    stores = _face_stores(hass)
+    ready = [s for s in stores if s["faces"].get("index") is not None]
+    if not ready:
+        team = stores[0].get("team_id") if len(stores) == 1 else None
+        raise ServiceValidationError(_faces.unavailable_message(team))
+    if len(ready) == 1:
+        return ready[0]
+    if face_ref is not None:
+        holders = []
+        for store in ready:
+            try:
+                found = _faces.resolve_face(store["faces"]["index"], face_ref)
+            except _faces.FaceSyncError:
+                continue
+            if found.get("rev") is not None:
+                holders.append(store)
+        if len(holders) == 1:
+            return holders[0]
+    raise ServiceValidationError(
+        "More than one Deckhand team syncs faces here. Pick the team with config_entry_id."
+    )
+
+
+def _resolve_library_face(store: dict[str, Any], face_ref: Any) -> dict[str, Any]:
+    try:
+        return _faces.resolve_face(_face_library(store), face_ref)
+    except _faces.FaceSyncError as exc:
+        raise ServiceValidationError(str(exc)) from None
+
+
+def _face_payload_arg(value: Any, field: str) -> dict[str, Any]:
+    """An object field (``payload``, ``overrides``). The object selector
+    hands a dict; YAML/JSON text is accepted too."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value) if value.strip() else {}
+        except ValueError:
+            raise ServiceValidationError(f"{field} must be an object (JSON).") from None
+    if not isinstance(value, dict):
+        raise ServiceValidationError(f"{field} must be an object.")
+    return value
+
+
+def _face_fields(data: Any) -> dict[str, Any]:
+    """The face keys a create / update / test call sets (absent = not sent)."""
+    face: dict[str, Any] = {}
+    for key in ("name", "kind", "description"):
+        value = data.get(key)
+        if value is not None:
+            face[key] = str(value).strip()
+    if data.get("enabled") is not None:
+        face["enabled"] = bool(data.get("enabled"))
+    if data.get("payload") is not None:
+        face["payload"] = _face_payload_arg(data.get("payload"), "payload")
+    return face
+
+
+def _prevalidate_face(face: dict[str, Any], index: dict[str, Any]) -> None:
+    try:
+        _faces.prevalidate(face, index)
+    except _faces.FaceSyncError as exc:
+        raise ServiceValidationError(str(exc)) from None
+
+
+def _raise_for_face_result(result: dict[str, Any], index: dict[str, Any]) -> None:
+    if not result.get("ok"):
+        raise ServiceValidationError(
+            _faces.error_message(result.get("error"), index.get("server"))
+        )
+
+
+def _face_targets_by_team(hass: HomeAssistant, device_id: Any) -> dict[str, list[str]]:
+    targets = _resolve_targets(hass, device_id)
+    if not targets:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="unknown_device",
+        )
+    by_team: dict[str, list[str]] = {}
+    for dial_id, team_id in targets:
+        dials = by_team.setdefault(str(team_id), [])
+        if dial_id not in dials:
+            dials.append(dial_id)
+    return by_team
+
+
+def _dial_chunks(dial_ids: list[str]) -> list[list[str]]:
+    size = _faces.MAX_DIALS
+    return [dial_ids[i:i + size] for i in range(0, len(dial_ids), size)]
+
+
+def _merge_face_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """One response for a dial action that went out as several requests
+    (dials on more than one team, or more than 32 dials)."""
+    if len(results) == 1:
+        return results[0]
+    merged: dict[str, Any] = {
+        "ok": all(r.get("ok") for r in results),
+        "action": results[0].get("action"),
+        "uid": results[0].get("uid"),
+        "rev": results[0].get("rev"),
+        "dials": {},
+        "warnings": [],
+        "results": results,
+    }
+    for result in results:
+        merged["dials"].update(result.get("dials") or {})
+        merged["warnings"].extend(result.get("warnings") or [])
+        for key in ("test_id", "expires_at"):
+            if key in result and key not in merged:
+                merged[key] = result[key]
+    return merged
 
 
 def _resolve_dial(
