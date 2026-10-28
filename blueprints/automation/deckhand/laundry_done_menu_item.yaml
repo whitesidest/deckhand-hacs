@@ -1,0 +1,136 @@
+blueprint:
+  name: "Deckhand: laundry done menu item"
+  description: >-
+    When the washer or dryer's power draw stays below a threshold for a few
+    minutes after a run, add a "Laundry done" item to the dials' menu.
+    Selecting it on a dial dismisses it everywhere; it also goes away when
+    the machine starts again or its time to live runs out. Uses
+    deckhand.add_menu_item / deckhand.remove_menu_item.
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/laundry_done_menu_item.yaml
+  input:
+    power_sensor:
+      name: Power sensor
+      description: The machine's power draw (a smart plug's power sensor).
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    threshold:
+      name: Idle below
+      description: Power below this means the machine has finished.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 500
+          unit_of_measurement: W
+    idle_minutes:
+      name: For at least
+      description: How long the power must stay below the threshold.
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+    dials:
+      name: Dials
+      description: Dials (or Rooms) whose menu gets the item.
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    label:
+      name: Menu label
+      description: >-
+        Label of the menu item. Selecting an item with this label on any
+        dial dismisses it, so keep it unique to this automation.
+      default: "Laundry done"
+      selector:
+        text: {}
+    key:
+      name: Item key
+      description: >-
+        The item's handle for add/remove. Use a different key for each
+        machine.
+      default: "laundry_done"
+      selector:
+        text: {}
+    ttl:
+      name: Time to live
+      description: The item removes itself after this long if nobody dismisses it.
+      default: 14400
+      selector:
+        number:
+          min: 60
+          max: 86400
+          unit_of_measurement: seconds
+          mode: box
+
+mode: queued
+max: 10
+
+trigger:
+  # numeric_state fires on the crossing, so the machine must have been
+  # drawing power first: a restart with the machine idle adds nothing.
+  - platform: numeric_state
+    entity_id: !input power_sensor
+    below: !input threshold
+    for:
+      minutes: !input idle_minutes
+    id: done
+  - platform: numeric_state
+    entity_id: !input power_sensor
+    above: !input threshold
+    id: started
+  # A menu press arrives in two shapes: this integration's re-fire (type +
+  # payload) and, with Helm, its relay (event_type, flat). Either one
+  # dismisses; removing twice is harmless.
+  - platform: event
+    event_type: deckhand_dial_event
+    event_data:
+      type: button_press
+    id: pressed
+  - platform: event
+    event_type: deckhand_dial_event
+    event_data:
+      event_type: button_press
+    id: pressed
+
+variables:
+  label: !input label
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: done
+        sequence:
+          - service: deckhand.add_menu_item
+            data:
+              device_id: !input dials
+              key: !input key
+              label: !input label
+              ttl: !input ttl
+      - conditions:
+          - condition: trigger
+            id: started
+        sequence:
+          - service: deckhand.remove_menu_item
+            data:
+              device_id: !input dials
+              key: !input key
+      - conditions:
+          - condition: trigger
+            id: pressed
+          - condition: template
+            value_template: >-
+              {% set d = trigger.event.data %}
+              {% set p = d.payload if d.payload is defined and d.payload is mapping else {} %}
+              {{ (d.item_label | default(p.item_label | default(''))) == label }}
+        sequence:
+          - service: deckhand.remove_menu_item
+            data:
+              device_id: !input dials
+              key: !input key

@@ -11,6 +11,33 @@ from ._source import async_source_for
 from .const import DOMAIN, HEARTBEAT_TIMEOUT, MANUFACTURER, HARDWARE_MODELS
 
 
+def dial_device_info(dial_id: str, data: dict[str, Any]) -> DeviceInfo:
+    """The device card for one dial, from its latest heartbeat.
+
+    ``hw_version`` is the raw ``hardware_type`` the dial reports (the
+    ``model`` is its friendly name). ``suggested_area`` is the dial's Room
+    when it belongs to exactly one (``_room``, stamped from ``groups/list``);
+    Home Assistant only uses it when it first creates the device.
+
+    No ``configuration_url``: the dial serves no web page on the LAN (only
+    its Wi-Fi setup portal, on its own access point), and the integration
+    knows no public https address for Helm or Console to link to instead.
+    """
+    hw_type = data.get("hardware_type")
+    info: dict[str, Any] = {
+        "identifiers": {(DOMAIN, dial_id)},
+        "manufacturer": MANUFACTURER,
+        "name": (f"{data['_label']} ({dial_id})" if data.get("_label") else f"Deckhand {dial_id}"),
+        "model": HARDWARE_MODELS.get(hw_type or "unknown", "Deckhand Dial"),
+        "sw_version": data.get("fw_ver"),
+    }
+    if hw_type and hw_type != "unknown":
+        info["hw_version"] = str(hw_type)
+    if data.get("_room"):
+        info["suggested_area"] = str(data["_room"])
+    return DeviceInfo(**info)
+
+
 class DeckhandEntity(Entity):
     """Base class for Deckhand entities."""
 
@@ -20,15 +47,7 @@ class DeckhandEntity(Entity):
         """Initialize the entity."""
         self._dial_id = dial_id
         self._dial_data = data
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, dial_id)},
-            manufacturer=MANUFACTURER,
-            name=(f"{data['_label']} ({dial_id})" if data.get("_label") else f"Deckhand {dial_id}"),
-            model=HARDWARE_MODELS.get(
-                data.get("hardware_type", "unknown"), "Deckhand Dial"
-            ),
-            sw_version=data.get("fw_ver"),
-        )
+        self._attr_device_info = dial_device_info(dial_id, data)
 
     @property
     def dial_id(self) -> str:
@@ -89,18 +108,5 @@ class DeckhandEntity(Entity):
         self._dial_data = data
         if hasattr(self, "_attr_device_info") and self._attr_device_info:
             # Update sw_version if firmware changed
-            fw = data.get("fw_ver")
-            if fw:
-                self._attr_device_info = DeviceInfo(
-                    identifiers={(DOMAIN, self._dial_id)},
-                    manufacturer=MANUFACTURER,
-                    name=(
-                        f"{data['_label']} ({self._dial_id})"
-                        if data.get("_label")
-                        else f"Deckhand {self._dial_id}"
-                    ),
-                    model=HARDWARE_MODELS.get(
-                        data.get("hardware_type", "unknown"), "Deckhand Dial"
-                    ),
-                    sw_version=fw,
-                )
+            if data.get("fw_ver"):
+                self._attr_device_info = dial_device_info(self._dial_id, data)

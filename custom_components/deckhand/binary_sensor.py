@@ -59,7 +59,7 @@ class DeckhandConnectivitySensor(DeckhandEntity, BinarySensorEntity):
     """Binary sensor representing dial online/offline status."""
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_name = "Connectivity"
+    _attr_translation_key = "connectivity"
 
     def __init__(self, dial_id: str, data: dict[str, Any]) -> None:
         """Initialize the connectivity sensor."""
@@ -112,7 +112,7 @@ class DeckhandDndSensor(DeckhandEntity, BinarySensorEntity):
     available automatically on the next heartbeat.
     """
 
-    _attr_name = "Do Not Disturb"
+    _attr_translation_key = "do_not_disturb"
     _attr_icon = "mdi:minus-circle"
 
     def __init__(self, dial_id: str, data: dict[str, Any]) -> None:

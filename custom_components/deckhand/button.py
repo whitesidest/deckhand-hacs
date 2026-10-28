@@ -52,7 +52,7 @@ class DeckhandRebootButton(DeckhandEntity, ButtonEntity):
     """Button to reboot a Deckhand dial."""
 
     _attr_device_class = ButtonDeviceClass.RESTART
-    _attr_name = "Reboot"
+    _attr_translation_key = "reboot"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(

@@ -249,6 +249,7 @@ HARDWARE_MODELS = {
     "waveshare18": "Waveshare 1.8in Knob",
     "matouch21": "MaTouch 2.1in Rotary",
     "crowpanel21": "CrowPanel 2.1in",
+    "amoled175": "AMOLED 1.75in",
     "unknown": "Deckhand Dial",
 }
 

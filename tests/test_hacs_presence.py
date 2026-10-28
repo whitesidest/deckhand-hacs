@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.23.0"  # 1.23.0 = dials advertising "img_jpeg" (firmware 0.4.220) get the doorbell picture as a baseline JPEG, 466 on the AMOLED; every other dial keeps raw RGB565 360 byte-for-byte
+    EXPECTED_VERSION = "1.24.0"  # 1.24.0 = discoverability: services.yaml descriptions + filtered pickers, diagnostics, entity translations, Brightness reflects the dial, three new blueprints
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

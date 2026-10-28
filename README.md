@@ -2,6 +2,33 @@
 
 HACS-compatible custom integration that makes Deckhand smart dials first-class Home Assistant citizens. Dials are auto-discovered via MQTT and appear as full HA devices with sensors, controls, and services.
 
+## What can my dial do?
+
+| Feature | Service | Entity / event | Blueprint |
+|---------|---------|----------------|-----------|
+| Change the theme | `deckhand.push_theme` | Theme select | |
+| Announce a message (text, animation, camera snapshot) | `deckhand.send_announcement` | | Doorbell snapshot announcement ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdoorbell_snapshot_announcement.yaml)) |
+| Count down to a moment | `deckhand.send_countdown` | | |
+| Kitchen timers | `deckhand.start_timer`, `deckhand.cancel_timer`, `deckhand.add_timer_time` | Timer event | |
+| Do Not Disturb | `deckhand.set_dnd` | Do Not Disturb binary sensor | DND hold calls ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdnd_hold_calls.yaml)) |
+| Brightness and night dim | `deckhand.apply_overlay` (`brightness`) | Brightness number | |
+| Show sensor readings | `deckhand.apply_overlay` (`home_face: sensor`), `deckhand.update_sensor_value` | | |
+| Perimeter Ring (doors, locks, leaks round the rim) | `deckhand.mount_perimeter_ring`, `deckhand.update_perimeter_state`, `deckhand.clear_perimeter_ring` | | Door open flashes the ring ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdoor_open_ring_flash.yaml)) |
+| Now playing | `deckhand.update_from_media_player`, `deckhand.update_now_playing` | Options: media_player bindings | |
+| Temporary menu items | `deckhand.add_menu_item`, `deckhand.remove_menu_item` | `deckhand_dial_event` on press | Laundry done menu item ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Flaundry_done_menu_item.yaml)) |
+| Switch the menu | `deckhand.push_menu` | | |
+| Wake-up alarms | `deckhand.create_alarm`, `enable_alarm`, `disable_alarm`, `snooze_alarm`, `dismiss_alarm` | `deckhand_dial_event` (snooze / dismiss) | |
+| Schedules | `deckhand.create_schedule`, `enable_schedule`, `disable_schedule`, `fire_schedule` | | |
+| Ask a yes/no question | `deckhand.send_invitation`, `deckhand.cancel_invitation` | `deckhand_dial_event` (`invitation_response`) | |
+| NFC cards and fobs | `deckhand.enroll_credential`, `revoke_credential`, `restore_credential` | `deckhand_dial_event` (`nfc_tap`) | Known tap runs a scene ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_known_tap_scene.yaml)), unknown tap alert ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_unknown_tap_alert.yaml)), revoked tap alert ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_revoked_tap_alert.yaml)) |
+| Show any face | `deckhand.mount_face`, `deckhand.unmount_face` | | |
+| Clock, haptics, time zone | `deckhand.set_dial_settings`, `deckhand.set_timezone` | | |
+| Sundowner sunset | `deckhand.set_sunset` | | |
+| React to presses and turns | | `deckhand_dial_event` | |
+| Dial health | `deckhand.reboot` | Battery, WiFi Signal, Connectivity, Reboot button; **Download diagnostics** on the device page | |
+
+Every service also takes a Room device, and `device_id: all` (YAML) reaches every dial.
+
 ## Brand icon
 
 `brand/` holds the Deckhand anchor at the sizes Home Assistant's brand
@@ -25,7 +52,7 @@ generic placeholder.
 
 1. Open HACS in Home Assistant
 2. Go to **Integrations** > three-dot menu > **Custom repositories**
-3. Add `https://github.com/neomind/deckhand-hacs` with category **Integration**
+3. Add `https://github.com/whitesidest/deckhand-hacs` with category **Integration**
 4. Search for "Deckhand" and install
 5. Restart Home Assistant
 
@@ -80,23 +107,36 @@ Each Deckhand dial creates the following entities:
 | Entity | Description |
 |--------|-------------|
 | Battery | Battery percentage (if battery-powered) |
-| WiFi Signal | RSSI in dBm |
+| WiFi Signal | RSSI in dBm (diagnostic) |
 | Temperature | Ambient temperature in Celsius (if SHT40 sensor present) |
 | Humidity | Relative humidity (if SHT40 sensor present) |
 | Ambient Light | Illuminance in lux (if APDS-9960 sensor present) |
-| Theme | Current active theme name |
+| Theme | Current active theme slug (diagnostic; the Theme select shows and changes the same value) |
 
 ### Binary Sensors
 | Entity | Description |
 |--------|-------------|
 | Connectivity | Online/offline based on MQTT heartbeat |
+| Do Not Disturb | On while the dial is in quiet mode (unavailable on firmware before 0.4.44) |
 
 ### Controls
 | Entity | Description |
 |--------|-------------|
 | Theme (select) | Dropdown to switch the dial's visual theme |
-| Brightness (number) | Display brightness slider (0-255) |
+| Brightness (number) | Night-dim cap, 0-100%. Shows the cap the dial reports (100 = no cap); on firmware that doesn't report it, the last value set, else unknown |
 | Reboot (button) | Restart the dial |
+
+### Events
+| Entity | Description |
+|--------|-------------|
+| Timer | `started`, `completed` or `cancelled` for the dial's timer |
+
+### Diagnostics
+
+**Download diagnostics** on the integration or a dial's device page gives the
+team id, each dial's last heartbeat (LAN address, MAC and Wi-Fi name
+redacted), firmware, whether a Perimeter Ring mount is retained, the sensor
+watches and the media_player bindings — attach it to a bug report.
 
 ## Services
 
@@ -459,11 +499,18 @@ Helm's audit log records every tap regardless.
 ### Shipped blueprints
 
 Ready-made automations live in
-[`blueprints/automation/deckhand/`](blueprints/automation/deckhand/):
+[`blueprints/automation/deckhand/`](blueprints/automation/deckhand/). Each
+button opens the import dialog in your own Home Assistant:
 
-- `nfc_known_tap_scene.yaml` — known tap (optionally filtered by role) runs a scene
-- `nfc_unknown_tap_alert.yaml` — unknown tap during a time window sends a notification
-- `nfc_revoked_tap_alert.yaml` — revoked-card tap always sends a notification
+| Blueprint | What it does | |
+|-----------|--------------|-|
+| `nfc_known_tap_scene.yaml` | Known tap (optionally filtered by role) runs a scene | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_known_tap_scene.yaml) |
+| `nfc_unknown_tap_alert.yaml` | Unknown tap during a time window sends a notification | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_unknown_tap_alert.yaml) |
+| `nfc_revoked_tap_alert.yaml` | Revoked-card tap always sends a notification | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fnfc_revoked_tap_alert.yaml) |
+| `dnd_hold_calls.yaml` | Dial in Do Not Disturb turns on a hold-calls light and notifies | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdnd_hold_calls.yaml) |
+| `doorbell_snapshot_announcement.yaml` | Doorbell rings: announcement with a camera snapshot on every dial (or the ones you pick) | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdoorbell_snapshot_announcement.yaml) |
+| `door_open_ring_flash.yaml` | Door open: a Perimeter Ring segment flashes until it closes (replaces the dial's current ring) | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdoor_open_ring_flash.yaml) |
+| `laundry_done_menu_item.yaml` | Washer/dryer power stays low: a "Laundry done" menu item; selecting it dismisses it | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Flaundry_done_menu_item.yaml) |
 
 ### Example: known tap by a Housekeeper runs a scene
 

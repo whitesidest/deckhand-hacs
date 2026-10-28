@@ -686,6 +686,10 @@ set_sunset:
       example: "sun.sun"
       selector:
         entity:
+          domain:
+            - sun
+            - sensor
+            - input_datetime
     attribute:
       name: Attribute
       description: >
@@ -800,6 +804,11 @@ apply_overlay:
       example: "sensor.living_room_temperature"
       selector:
         entity:
+          domain:
+            - sensor
+            - binary_sensor
+            - number
+            - input_number
     sensor_label:
       name: Sensor label (slot 1)
       description: Display label for the slot-1 sensor.
@@ -811,8 +820,14 @@ apply_overlay:
       description: HA entity for the second quadrant of the sensor face.
       selector:
         entity:
+          domain:
+            - sensor
+            - binary_sensor
+            - number
+            - input_number
     sensor_quad_2_label:
       name: Quad slot 2 label
+      description: Display label for the slot-2 sensor.
       selector:
         text:
     sensor_quad_3_entity_id:
@@ -820,8 +835,14 @@ apply_overlay:
       description: HA entity for the third quadrant of the sensor face.
       selector:
         entity:
+          domain:
+            - sensor
+            - binary_sensor
+            - number
+            - input_number
     sensor_quad_3_label:
       name: Quad slot 3 label
+      description: Display label for the slot-3 sensor.
       selector:
         text:
     sensor_quad_4_entity_id:
@@ -829,8 +850,14 @@ apply_overlay:
       description: HA entity for the fourth quadrant of the sensor face.
       selector:
         entity:
+          domain:
+            - sensor
+            - binary_sensor
+            - number
+            - input_number
     sensor_quad_4_label:
       name: Quad slot 4 label
+      description: Display label for the slot-4 sensor.
       selector:
         text:
     sensor_marquee:
@@ -917,6 +944,7 @@ update_now_playing:
         text:
     artist:
       name: Artist
+      description: Shown under the title. Leave blank to show the title alone.
       example: "Fleetwood Mac"
       selector:
         text:
@@ -990,11 +1018,18 @@ update_sensor_value:
           multiple: true
     entity_id:
       name: Source entity
-      description: HA entity id this reading belongs to.
+      description: >
+        HA entity id this reading belongs to. The dial matches the value to
+        the sensor face slot showing this entity.
       required: true
       example: "sensor.living_room_temp"
       selector:
         entity:
+          domain:
+            - sensor
+            - binary_sensor
+            - number
+            - input_number
     label:
       name: Label
       description: Short label shown above the value.
@@ -1010,18 +1045,15 @@ update_sensor_value:
         text:
     unit:
       name: Unit
+      description: Unit shown after the value. Leave blank for none.
       example: "°F"
-      selector:
-        text:
-    icon:
-      name: Icon
-      description: Optional FontAwesome-style glyph id for future use.
-      example: "fa-thermometer-half"
       selector:
         text:
     color:
       name: Tint color
-      description: Hex string like "#FFD700" to tint the value display.
+      description: >
+        Optional tint for the value, as a hex colour "#RRGGBB" (for
+        example "#FFD700"). Leave blank for the default colour.
       example: "#FFD700"
       selector:
         text:
@@ -1325,6 +1357,7 @@ update_perimeter_state:
   fields:
     device_id:
       name: Device
+      description: Dial(s) whose Perimeter Ring gets the new state. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1394,6 +1427,7 @@ mount_face:
   fields:
     device_id:
       name: Device
+      description: Dial(s) to mount the face on. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1434,6 +1468,7 @@ unmount_face:
   fields:
     device_id:
       name: Device
+      description: Dial(s) to dismiss the face from. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1661,6 +1696,7 @@ create_alarm:
         text:
     snooze_minutes:
       name: Snooze Minutes
+      description: How long a snooze on the dial holds off the ring.
       default: 9
       selector:
         number:
@@ -1678,11 +1714,16 @@ create_alarm:
           unit_of_measurement: seconds
     sunrise_color:
       name: Sunrise Color
+      description: >
+        A hex colour "#RRGGBB" (for example "#FFC66E", the default) handed
+        to pre-alarm automations, e.g. to tint bedroom lights. The dial
+        itself no longer draws a sunrise colour.
       example: "#FFC66E"
       selector:
         text:
     enabled:
       name: Enabled
+      description: Turn off to save the alarm without arming it.
       default: true
       selector:
         boolean:
@@ -1693,6 +1734,7 @@ enable_alarm:
   fields:
     device_id:
       name: Device
+      description: Dial(s) the alarm belongs to. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1700,6 +1742,7 @@ enable_alarm:
           multiple: true
     name:
       name: Alarm Name
+      description: The name the alarm was created with.
       required: true
       example: "Wake Tyler"
       selector:
@@ -1714,6 +1757,7 @@ disable_alarm:
   fields:
     device_id:
       name: Device
+      description: Dial(s) the alarm belongs to. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1721,6 +1765,7 @@ disable_alarm:
           multiple: true
     name:
       name: Alarm Name
+      description: The name the alarm was created with.
       required: true
       example: "Wake Tyler"
       selector:
@@ -1732,6 +1777,7 @@ snooze_alarm:
   fields:
     device_id:
       name: Device
+      description: Dial(s) whose ringing alarm to snooze. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1744,6 +1790,7 @@ dismiss_alarm:
   fields:
     device_id:
       name: Device
+      description: Dial(s) whose ringing alarm to dismiss. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1768,6 +1815,7 @@ enroll_credential:
           multiple: true
     identity_name:
       name: Identity Name
+      description: Who the card belongs to. Created if it doesn't exist yet.
       required: true
       example: "Guest Ana"
       selector:
@@ -1781,6 +1829,7 @@ enroll_credential:
         text:
     label:
       name: Label
+      description: Optional note to tell this card apart from the identity's others.
       example: "Blue fob"
       selector:
         text:
@@ -1809,6 +1858,7 @@ revoke_credential:
           multiple: true
     identity_name:
       name: Identity Name
+      description: Every active credential for this identity is revoked.
       required: true
       example: "Guest Ana"
       selector:
@@ -1820,6 +1870,7 @@ restore_credential:
   fields:
     device_id:
       name: Device
+      description: Any dial (identity match is team-wide).
       required: true
       selector:
         device:
@@ -1827,6 +1878,7 @@ restore_credential:
           multiple: true
     identity_name:
       name: Identity Name
+      description: Every revoked credential for this identity is restored.
       required: true
       example: "Guest Ana"
       selector:
@@ -1850,12 +1902,18 @@ create_schedule:
           multiple: true
     name:
       name: Schedule Name
+      description: The schedule's handle — reuse it to update, enable, disable or fire it.
       required: true
       example: "Evening Scene"
       selector:
         text:
     trigger_type:
       name: Trigger
+      description: >
+        What fires the schedule. ``time`` repeats at Fire Time on the chosen
+        days (or hourly, see Recurrence); ``one_time`` fires once on
+        One-Time Date; ``ha_webhook`` fires when the webhook slug is called;
+        ``sunset`` fires at local sunset.
       default: "time"
       selector:
         select:
@@ -1901,40 +1959,54 @@ create_schedule:
             - "hourly"
     one_time_date:
       name: One-Time Date
+      description: The date a one_time trigger fires on (YYYY-MM-DD).
       example: "2026-08-02"
       selector:
         date:
     interval_hours:
       name: Every N Hours (hourly)
+      description: Hourly recurrence only — fire every this many hours.
       selector:
         number:
           min: 1
           max: 24
     minute_offset:
       name: Minute Offset (hourly)
+      description: Hourly recurrence only — the minute past the hour it fires on.
       selector:
         number:
           min: 0
           max: 59
     hour_start:
       name: Active From Hour (hourly)
+      description: Hourly recurrence only — first hour of the day it may fire (0-23, default 0).
       selector:
         number:
           min: 0
           max: 23
     hour_end:
       name: Active Until Hour (hourly)
+      description: >
+        Hourly recurrence only — last hour of the day it may fire (0-23,
+        inclusive, default 23). Earlier than the start hour wraps past
+        midnight.
       selector:
         number:
           min: 0
           max: 23
     webhook_slug:
       name: HA Webhook Slug (ha_webhook trigger)
+      description: >
+        ha_webhook trigger only — the slug the server listens on. Leave
+        blank and the server makes one up.
       selector:
         text:
     theme:
       name: Theme Slug
-      description: Theme to push when the schedule fires.
+      description: >
+        Theme to push when the schedule fires. Any slug the dial's Theme
+        select entity offers works here (open it to see your team's
+        catalog). Leave blank to keep the current theme.
       example: "vesper"
       selector:
         text:
@@ -1946,23 +2018,56 @@ create_schedule:
         text:
     announcement_message:
       name: Announcement Message
+      description: Text of the announcement shown when the schedule fires. Leave blank for none.
       selector:
         text:
     announcement_from:
       name: Announcement From
+      description: Who the announcement is from.
       selector:
         text:
     announcement_duration_s:
       name: Announcement Duration (seconds)
+      description: >
+        How long the announcement stays up. 0 (the default) keeps it on the
+        dial until someone touches it.
       selector:
         number:
           min: 0
           max: 300
+          unit_of_measurement: seconds
     announcement_animation:
       name: Announcement Animation
+      description: >
+        Visual effect behind the announcement — the same choices as
+        send_announcement's Animation.
       example: "sparkle"
       selector:
-        text:
+        select:
+          options:
+            - "none"
+            - sparkle
+            - flash
+            - fireworks
+            - magic_spell
+            - fire
+            - waves
+            - rain
+            - opening_flower
+            - falling_leaves
+            - confetti
+            - snow
+            - aurora
+            - ripple
+            - "signal:ready"
+            - "signal:question"
+            - "signal:available"
+            - "signal:timed_state"
+            - "signal:overdue"
+            - "signal:comfort"
+            - "signal:priority"
+            - "signal:emergency"
+            - "signal:dnd"
     target_scope:
       name: Target Scope (advanced)
       description: Omit for the addressed dial; "all" for team-wide.
@@ -1971,15 +2076,18 @@ create_schedule:
         text:
     enabled:
       name: Enabled
+      description: Turn off to save the schedule without arming it.
       default: true
       selector:
         boolean:
 
 enable_schedule:
   name: Enable Schedule
+  description: Re-enable a named schedule paused with disable_schedule.
   fields:
     device_id:
       name: Device
+      description: Dial(s) the schedule targets. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -1987,6 +2095,7 @@ enable_schedule:
           multiple: true
     name:
       name: Schedule Name
+      description: The name the schedule was created with.
       required: true
       selector:
         text:
@@ -1997,6 +2106,7 @@ disable_schedule:
   fields:
     device_id:
       name: Device
+      description: Dial(s) the schedule targets. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -2004,6 +2114,7 @@ disable_schedule:
           multiple: true
     name:
       name: Schedule Name
+      description: The name the schedule was created with.
       required: true
       selector:
         text:
@@ -2014,6 +2125,7 @@ fire_schedule:
   fields:
     device_id:
       name: Device
+      description: Dial(s) the schedule targets. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -2021,6 +2133,7 @@ fire_schedule:
           multiple: true
     name:
       name: Schedule Name
+      description: The name the schedule was created with.
       required: true
       selector:
         text:
@@ -2034,6 +2147,7 @@ push_menu:
   fields:
     device_id:
       name: Device
+      description: Dial(s) to switch. Multiple, Rooms, or "all" (YAML mode) supported.
       required: true
       selector:
         device:
@@ -2041,6 +2155,7 @@ push_menu:
           multiple: true
     profile:
       name: Menu Profile Name
+      description: Name of the menu profile to show, as it appears in Helm or Console.
       required: true
       example: "Party"
       selector:
@@ -2184,15 +2299,18 @@ send_invitation:
     theme_override:
       name: Theme override slug
       description: >
-        Optional theme slug to render behind the prompt card. Falls back
-        to the dial's current theme. ``solid_color`` is ignored when
-        ``theme_override`` is set.
+        Optional theme slug to render behind the prompt card. Any slug the
+        dial's Theme select entity offers works here (open it to see your
+        team's catalog). Falls back to the dial's current theme.
+        ``solid_color`` is ignored when ``theme_override`` is set.
       example: "concierge"
       selector:
         text:
     solid_color:
       name: Solid background color
-      description: 'Hex like "#0A1F2C" — used when no theme_override.'
+      description: >
+        Background as a hex colour "#RRGGBB" (for example "#0A1F2C"). Used
+        only when no theme_override is set.
       example: "#0A1F2C"
       selector:
         text:

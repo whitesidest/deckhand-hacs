@@ -55,7 +55,7 @@ async def async_setup_entry(
 class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
     """Select entity for choosing a dial's theme."""
 
-    _attr_name = "Theme"
+    _attr_translation_key = "theme"
     _attr_icon = "mdi:palette"
 
     def __init__(

@@ -75,7 +75,7 @@ class DeckhandTimerEvent(DeckhandEntity, EventEntity):
     and ``minutes`` (the length it was set to; absent on firmware before
     0.4.125)."""
 
-    _attr_name = "Timer"
+    _attr_translation_key = "timer"
     _attr_icon = "mdi:timer-outline"
     _attr_event_types = list(TIMER_EVENT_TYPES.values())
 

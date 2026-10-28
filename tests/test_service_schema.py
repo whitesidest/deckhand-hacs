@@ -97,8 +97,11 @@ SEND_ANNOUNCEMENT_FIELDS = frozenset({
     "transition",
 })
 
+# ``icon`` was dropped from the UI in 1.24.0 (it was documented "for future
+# use" and nothing draws it). The handler still accepts it, so automations
+# that pass it keep working: see tests/test_services_yaml_lint.py.
 UPDATE_SENSOR_VALUE_FIELDS = frozenset({
-    "device_id", "entity_id", "value", "label", "unit", "icon", "color",
+    "device_id", "entity_id", "value", "label", "unit", "color",
 })
 
 SEND_INVITATION_FIELDS = frozenset({
