@@ -1,6 +1,7 @@
 """Deckhand Smart Dial integration for Home Assistant."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -76,7 +77,7 @@ from .const import (
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
 )
-from .image_push import publish_image_to_dial
+from .image_push import prepare_image, publish_prepared_image
 from ._source import async_source_for, dumps_with_source
 from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard, is_internal_request
@@ -1530,11 +1531,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # fetch failure is non-fatal — we still send the text announce so
         # the doorbell chime never silently drops just because the camera
         # hiccuped.
-        image_bytes: bytes | None = None
+        image = None
         if snapshot_entity or image_url:
             image_bytes = await _fetch_announcement_image(
                 hass, snapshot_entity, image_url
             )
+            # Convert + chunk ONCE for the whole room. It used to run per
+            # dial, inside the send loop, so each dial's announcement also
+            # waited for every earlier dial's conversion and stream — the
+            # last dial in an 8-dial house rang several seconds late.
+            if image_bytes is not None:
+                try:
+                    image = await hass.async_add_executor_job(
+                        prepare_image, image_bytes
+                    )
+                except Exception:  # noqa: BLE001 - best-effort; text still goes
+                    _LOGGER.warning(
+                        "send_announcement: could not decode the image "
+                        "— sending text announcement without image",
+                        exc_info=True,
+                    )
 
         payload: dict[str, Any] = {
             "message": message,
@@ -1557,28 +1573,25 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         # theme animation and waits for the cmd/image chunks. Firmware
         # reads this as ``announce_has_pending_image`` (mirrors Helm's
         # push_announcement_to_dial ``image=True``).
-        if image_bytes is not None:
+        if image is not None:
             payload["image"] = True
         src = await _call_source(call)
         body = dumps_with_source(payload, src)
+        # Every dial's cmd/announce (image:true) goes out FIRST, so the whole
+        # house shows the text at once; the image streams follow.
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_ANNOUNCE.format(team_id=team_id, dial_id=dial_id)
-            # cmd/announce with image:true FIRST, then the image stream.
             await mqtt.async_publish(hass, topic, body)
-            if image_bytes is not None:
-                try:
-                    await publish_image_to_dial(
-                        hass, team_id, dial_id, image_bytes, source=src
-                    )
-                except Exception:  # noqa: BLE001 - best-effort; text already sent
-                    _LOGGER.exception(
-                        "send_announcement: image push failed for dial %s "
-                        "(text announcement was still sent)",
-                        dial_id,
-                    )
+        if image is not None:
+            await asyncio.gather(
+                *(
+                    _publish_announcement_image(hass, dial_id, team_id, image, src)
+                    for dial_id, team_id in targets
+                )
+            )
         _LOGGER.info(
             "Sent announcement to %d dial(s): %s (animation=%s, transition=%s, image=%s)",
-            len(targets), message, animation, transition, image_bytes is not None,
+            len(targets), message, animation, transition, image is not None,
         )
 
     async def _send_countdown(call) -> None:
@@ -3768,6 +3781,29 @@ def _resolve_dial(
         if team_id:
             return dial_id, str(team_id)
     return None
+
+
+async def _publish_announcement_image(
+    hass: HomeAssistant,
+    dial_id: str,
+    team_id: str,
+    image: Any,
+    src: dict[str, str] | None,
+) -> None:
+    """Stream one dial's announcement backdrop; a failure stays with that dial.
+
+    send_announcement gathers one of these per dial, so a dial that errors
+    mid-stream neither stops the others nor fails the service call — its
+    text announcement already went out.
+    """
+    try:
+        await publish_prepared_image(hass, team_id, dial_id, image, source=src)
+    except Exception:  # noqa: BLE001 - best-effort; text already sent
+        _LOGGER.exception(
+            "send_announcement: image push failed for dial %s "
+            "(text announcement was still sent)",
+            dial_id,
+        )
 
 
 async def _fetch_announcement_image(

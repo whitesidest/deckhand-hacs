@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.22.2"  # 1.22.2 = a Wi-Fi QR item's qr_request fetch (button_press action "qr_request") is never fired as deckhand_dial_event
+    EXPECTED_VERSION = "1.22.3"  # 1.22.3 = a doorbell picture is converted once per send and streamed to every dial at once, after every dial is announced
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))

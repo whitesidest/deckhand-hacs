@@ -550,10 +550,18 @@ class QuietInvitationTests(unittest.TestCase):
         # tests actually exercise (helm#224 added _resolve_transition).
         helpers = [
             n for n in tree.body
-            if isinstance(n, ast.FunctionDef)
-            and n.name in (
-                "_resolve_transition", "_announcement_duration_s",
-                "_build_on_accept_from_fields", "_split_ha_service",
+            if (
+                isinstance(n, ast.FunctionDef)
+                and n.name in (
+                    "_resolve_transition", "_announcement_duration_s",
+                    "_build_on_accept_from_fields", "_split_ha_service",
+                )
+            )
+            # send_announcement's per-dial image stream (fans out with
+            # asyncio.gather); it calls the stubbed publish_prepared_image.
+            or (
+                isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "_publish_announcement_image"
             )
         ]
 
@@ -581,7 +589,7 @@ class QuietInvitationTests(unittest.TestCase):
         async def _no_image(hass, snapshot_entity, image_url):
             return None
 
-        async def _noop_image_push(hass, team_id, dial_id, image_bytes):
+        async def _noop_image_push(hass, team_id, dial_id, image, source=None):
             return None
 
         targets = [("DECK-AAAA", "team-1"), ("DECK-BBBB", "team-1")]
@@ -629,7 +637,10 @@ class QuietInvitationTests(unittest.TestCase):
             "_resolve_targets": lambda hass, device_id: list(targets),
             "_resolve_all_dials": lambda hass: list(targets),
             "_fetch_announcement_image": _no_image,
-            "publish_image_to_dial": _noop_image_push,
+            "prepare_image": lambda image_bytes: image_bytes,
+            "publish_prepared_image": _noop_image_push,
+            "asyncio": asyncio,
+            "HomeAssistant": object,
             "TOPIC_CMD_ANNOUNCE": (
                 "deckhand/{team_id}/dial/{dial_id}/cmd/announce"
             ),
@@ -644,6 +655,10 @@ class QuietInvitationTests(unittest.TestCase):
             "TRANSITIONS": ("fade", "none", "iris", "dissolve"),
             "DEFAULT_TRANSITION": "fade",
         }
+        # A test may swap in its own stand-ins (e.g. the image path).
+        ns.update(getattr(self, "harness_overrides", None) or {})
+        if "async_add_executor_job" in ns:
+            ns["hass"] = SimpleNamespace(async_add_executor_job=ns["async_add_executor_job"])
         exec(
             compile(ast.Module(body=[*helpers, fn], type_ignores=[]), INIT_PY.name, "exec"),
             ns,
