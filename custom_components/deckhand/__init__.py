@@ -77,7 +77,7 @@ from .const import (
 from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
     format_sensor_value as _format_sensor_value_tuple,
 )
-from .image_push import prepare_image, publish_prepared_image
+from .image_push import image_variant_for, prepare_variants, publish_prepared_image
 from ._source import async_source_for, dumps_with_source
 from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard, is_internal_request
@@ -1540,11 +1540,26 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             # dial, inside the send loop, so each dial's announcement also
             # waited for every earlier dial's conversion and stream — the
             # last dial in an 8-dial house rang several seconds late.
+            #
+            # 1.23.0: once per VARIANT. A dial whose heartbeat lists
+            # "img_jpeg" gets a JPEG at its native edge; every other dial
+            # gets the raw RGB565 360 it always did. Only the variants some
+            # target needs are built.
             if image_bytes is not None:
-                try:
-                    image = await hass.async_add_executor_job(
-                        prepare_image, image_bytes
+                variant_of = {
+                    (dial_id, team_id): image_variant_for(
+                        _dial_heartbeat(hass, dial_id, team_id)
                     )
+                    for dial_id, team_id in targets
+                }
+                try:
+                    prepared = await hass.async_add_executor_job(
+                        prepare_variants, image_bytes, set(variant_of.values())
+                    )
+                    image = {
+                        target: prepared[variant]
+                        for target, variant in variant_of.items()
+                    }
                 except Exception:  # noqa: BLE001 - best-effort; text still goes
                     _LOGGER.warning(
                         "send_announcement: could not decode the image "
@@ -1585,7 +1600,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         if image is not None:
             await asyncio.gather(
                 *(
-                    _publish_announcement_image(hass, dial_id, team_id, image, src)
+                    _publish_announcement_image(
+                        hass, dial_id, team_id, image[(dial_id, team_id)], src
+                    )
                     for dial_id, team_id in targets
                 )
             )
@@ -3869,6 +3886,25 @@ async def _fetch_announcement_image(
             )
             return None
 
+    return None
+
+
+def _dial_heartbeat(
+    hass: HomeAssistant, dial_id: str, team_id: str
+) -> dict[str, Any] | None:
+    """The last status heartbeat seen from one dial, or None.
+
+    ``_handle_status`` keeps each dial's whole status payload (including
+    ``features``, ``hardware_type`` and ``fw_ver``) in its entry's
+    ``dials`` cache; this looks it up by the (dial_id, team_id) pair the
+    target resolvers return.
+    """
+    for store in hass.data.get(DOMAIN, {}).values():
+        if not isinstance(store, dict) or str(store.get("team_id")) != str(team_id):
+            continue
+        status = (store.get("dials") or {}).get(dial_id)
+        if isinstance(status, dict):
+            return status
     return None
 
 

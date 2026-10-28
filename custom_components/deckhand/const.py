@@ -204,6 +204,22 @@ IMAGE_DEFAULT_SIZE = 360
 # firmware's 8 KB inbound cap (network.h: ``if (length >= 8192) return``).
 IMAGE_CHUNK_SIZE_BYTES = 5120
 
+# JPEG image push (firmware 0.4.220, deckhand-firmware#234). A dial that
+# lists IMAGE_JPEG_FEATURE in the ``features`` array of its status
+# heartbeat decodes a baseline JPEG itself (``"fmt":"jpeg"`` on the start
+# message, ``size`` = JPEG byte count), so the stream is a few chunks
+# instead of 51. A dial WITHOUT the feature keeps getting raw RGB565
+# byte-for-byte: older firmware would paint JPEG bytes as pixel garbage.
+IMAGE_JPEG_FEATURE = "img_jpeg"
+# Firmware caps: baseline only, at most 256 KB (larger falls back to raw),
+# each edge <= 512.
+IMAGE_JPEG_MAX_BYTES = 256 * 1024
+IMAGE_JPEG_QUALITY = 80
+# Native panel edge per hardware_type, used ONLY for JPEG-capable dials
+# (a 466x466 JPEG is still small; raw stays 360 everywhere). Anything not
+# listed gets IMAGE_DEFAULT_SIZE.
+IMAGE_JPEG_NATIVE_SIZES = {"amoled175": 466}
+
 # Default heartbeat timeout (seconds) — mark offline/unavailable if no
 # heartbeat received within this window.
 HEARTBEAT_TIMEOUT = 120
