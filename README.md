@@ -10,6 +10,7 @@ HACS-compatible custom integration that makes Deckhand smart dials first-class H
 | Announce a message (text, animation, camera snapshot) | `deckhand.send_announcement` | | Doorbell snapshot announcement ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdoorbell_snapshot_announcement.yaml)) |
 | Count down to a moment | `deckhand.send_countdown` | | |
 | Kitchen timers | `deckhand.start_timer`, `deckhand.cancel_timer`, `deckhand.add_timer_time` | Timer event | |
+| Thermostat on the dial | `deckhand.mount_climate_face` | | |
 | Do Not Disturb | `deckhand.set_dnd` | Do Not Disturb binary sensor | DND hold calls ([Import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fwhitesidest%2Fdeckhand-hacs%2Fmain%2Fblueprints%2Fautomation%2Fdeckhand%2Fdnd_hold_calls.yaml)) |
 | Brightness and night dim | `deckhand.apply_overlay` (`brightness`) | Brightness number | |
 | Show sensor readings | `deckhand.apply_overlay` (`home_face: sensor`), `deckhand.update_sensor_value` | | |
@@ -28,6 +29,26 @@ HACS-compatible custom integration that makes Deckhand smart dials first-class H
 | Dial health | `deckhand.reboot` | Battery, WiFi Signal, Connectivity, Reboot button; **Download diagnostics** on the device page | |
 
 Every service also takes a Room device, and `device_id: all` (YAML) reaches every dial.
+
+## Repairs
+
+**Settings → System → Repairs** tells you when something needs a hand:
+
+- **Update a dial's firmware** — an automation or service asked a dial for
+  something its firmware ignores (Do Not Disturb needs 0.4.44, the Climate
+  face 0.4.98, the Perimeter Ring's theme colours 0.4.158 and
+  hide-when-calm 0.4.161). The command is still sent; the notice clears on
+  the dial's first check-in on new enough firmware.
+- **A dial has been offline for a day** — clears when it checks in again.
+- **Import the Deckhand blueprints** — none of the shipped blueprints is in
+  `config/blueprints/automation/`. HACS installs only the integration, not
+  the repository's `blueprints/` folder, so the fix lists an import link
+  for each one and checks again when you submit. Ignore it if you don't
+  want them.
+
+After setup, the integration shows what happens next (dials appear as they
+check in, the blueprint import links, the docs); the same page is under
+**Configure → Dials, blueprints and docs**, with the dials found so far.
 
 ## Brand icon
 
@@ -623,6 +644,31 @@ topic) so existing automations keep working; `mount_face` with
 `update_perimeter_state`'s `layer: pulse` reaches the ring. Mounting the
 ring also clears any retained Perimeter Pulse mount so the old face cannot
 resurrect on reconnect.
+
+## Climate face
+
+`deckhand.mount_climate_face` turns a dial into a thermostat for one
+`climate` entity: twist to set the temperature, and pick a mode when you
+list some (`hvac_modes`, up to 6). `title` up to 22 characters, `min` /
+`max` 0-200 with min below max (default 60-85), `step` 1-10. The face opens
+on the entity's current setpoint, temperature and mode. A change made on
+the dial goes to Helm / Deckhand Console as a request for that entity —
+the face never switches the HVAC itself. The dial draws the numbers as °F
+whatever your unit system, so pick a range in the entity's own units.
+Firmware 0.4.98 or later.
+
+```yaml
+service: deckhand.mount_climate_face
+data:
+  device_id: <ha_device_id>
+  entity_id: climate.living_room
+  title: Living Room
+  min: 62
+  max: 80
+  hvac_modes: [heat, cool, "off"]
+```
+
+`deckhand.unmount_face` with `face_id: climate` takes it down.
 
 ## Streaming updates: Now Playing + Sensor Value
 
