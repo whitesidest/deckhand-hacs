@@ -400,7 +400,11 @@ class ReconfigureFlow(unittest.TestCase):
         flow.hass = _Hass([])
         bad = asyncio.run(flow.async_step_user({"team_id": "a/b"}))
         self.assertEqual(bad["errors"], {"team_id": "invalid_team_id"})
-        good = asyncio.run(flow.async_step_user({"team_id": " local "}))
+        # 1.26.0: a valid team id shows the "what next" page first; submitting
+        # it creates the entry.
+        finish = asyncio.run(flow.async_step_user({"team_id": " local "}))
+        self.assertEqual((finish["type"], finish["step_id"]), ("form", "finish"))
+        good = asyncio.run(flow.async_step_finish({}))
         self.assertEqual((good["type"], good["title"], good["data"]),
                          ("create_entry", "Deckhand (Team local)", {"team_id": "local"}))
         self.assertEqual(flow.unique_id, "deckhand_local")

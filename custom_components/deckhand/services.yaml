@@ -2723,3 +2723,87 @@ clear_face_test:
         Home Assistant started (for example after a restart).
       selector:
         text:
+
+mount_climate_face:
+  name: Mount Climate face
+  description: >
+    Turn the dial into a thermostat for one climate entity: twist to set
+    the temperature, and pick a mode when you list some. A change made on
+    the dial goes to Helm / Deckhand Console as a request for that entity
+    — the face never switches the HVAC itself. Opens on the entity's
+    current setpoint, temperature and mode. Retained, so it survives a
+    reboot; unmount_face with face_id climate takes it down. Firmware
+    0.4.98 or later (older dials ignore it, and Repairs says so). Admin
+    only.
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s) to mount the face on. Multiple, Rooms, or "all" (YAML mode) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    entity_id:
+      name: Thermostat
+      description: The climate entity the face controls.
+      required: true
+      example: "climate.living_room"
+      selector:
+        entity:
+          domain: climate
+    title:
+      name: Title
+      description: Shown at the top of the face, up to 22 characters. Default "Climate".
+      example: "Living Room"
+      selector:
+        text:
+    min:
+      name: Minimum
+      description: >
+        Lowest setpoint the dial offers (0-200, below Maximum). Default 60.
+        The dial draws the numbers as °F whatever your unit system, so pick
+        a range in the entity's own units.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 200
+          step: 1
+          mode: box
+    max:
+      name: Maximum
+      description: Highest setpoint the dial offers (0-200, above Minimum). Default 85.
+      default: 85
+      selector:
+        number:
+          min: 0
+          max: 200
+          step: 1
+          mode: box
+    step:
+      name: Step
+      description: How far one click of the knob moves the setpoint (1-10). Default 1.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          mode: box
+    hvac_modes:
+      name: Modes
+      description: >
+        Up to 6 modes the dial's mode picker offers. Leave empty for no
+        picker.
+      selector:
+        select:
+          multiple: true
+          options:
+            - "off"
+            - heat
+            - cool
+            - heat_cool
+            - auto
+            - dry
+            - fan_only

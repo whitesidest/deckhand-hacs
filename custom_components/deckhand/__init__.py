@@ -86,7 +86,7 @@ from ._units import (  # vendored copy of deckhand_sdk/deckhand/units.py
 )
 from .image_push import image_variant_for, prepare_variants, publish_prepared_image
 from ._source import async_source_for, dumps_with_source
-from . import _faces
+from . import _climate, _faces, _issues, _repairs
 from ._media_control import media_service_for_dial_event
 from ._press_guard import ACCEPT as PRESS_ACCEPT, PressGuard, is_internal_request
 from ._now_playing import now_playing_controls, now_playing_fields, now_playing_input_tier
@@ -227,6 +227,19 @@ def _coerce_number(value: Any, field: str) -> float:
     raise ServiceValidationError(f"{field} must be a number (got {value!r}).")
 
 
+def _repairs_safely(func, *args) -> Any:
+    """Run a Repairs bookkeeping step; never let it break the caller.
+
+    The status handler, the lifecycle handler and the services call these.
+    An issue registry hiccup must not drop a heartbeat or a command.
+    """
+    try:
+        return func(*args)
+    except Exception:  # noqa: BLE001 - bookkeeping only
+        _LOGGER.debug("Deckhand repairs bookkeeping failed", exc_info=True)
+        return None
+
+
 _OVERLAY_SUBTITLE_MODES = {
     "theme", "custom", "date", "date_year", "ical_next_event", "none",
 }
@@ -290,6 +303,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # index (None until faces/list arrives = face sync unavailable),
         # cached items, and the futures face services await by request_id.
         "faces": _new_faces_store(),
+        # Repairs (_issues.py): when this entry started watching (a dial
+        # silent since then counts as silent from here), and the gated
+        # features each dial was asked for and could not honour.
+        "_watching_since": datetime.now(),
+        "_fw_gaps": {},
     }
 
     # The dial GETs album art from us (baseline JPEG, dial-sized) rather
@@ -354,6 +372,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             hass.async_create_task(
                 _async_add_dial_entities(hass, entry, dial_id, enriched)
             )
+
+        # A dial that reports is not offline, and may have been updated.
+        _repairs_safely(_issues.on_heartbeat, hass, store, dial_id, enriched)
 
         # Fire an event so existing entities can update. Include the
         # _last_seen timestamp so entities can compute availability.
@@ -657,6 +678,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             return
         _LOGGER.info("Lifecycle deregister for %s — removing from device registry", dial_id)
         registry.async_remove_device(device.id)
+        _repairs_safely(_issues.forget_dial, hass, dial_id)
 
     entry.async_on_unload(
         hass.bus.async_listen(f"{DOMAIN}_dial_event", _handle_lifecycle)
@@ -769,6 +791,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     # Register services
     _register_services(hass, entry)
+
+    # Repairs: dials quiet for a day (_issues.check_offline), and the
+    # shipped blueprints not imported yet.
+    async def _check_offline(_now: datetime | None = None) -> None:
+        store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if not store:
+            return
+        _repairs_safely(
+            lambda: _issues.check_offline(
+                hass, store, _issues.entry_dial_ids(hass, entry.entry_id),
+                store["_watching_since"],
+            )
+        )
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _check_offline, timedelta(seconds=_repairs.OFFLINE_CHECK_S)
+        )
+    )
+    _repairs_safely(lambda: hass.async_create_task(_issues.async_check_blueprints(hass)))
 
     # Register state-change listeners for any configured media_player
     # bindings, and keep them in sync when the options flow changes.
@@ -2321,6 +2363,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
                 translation_key="unknown_device",
             )
 
+        # Firmware before 0.4.44 ignores cmd/dnd: say so in Repairs.
+        _repairs_safely(_issues.note_firmware_gaps, hass, targets, ["dnd"])
         body = dumps_with_source({"on": on, "source": "ha"}, await _call_source(call))
         for dial_id, team_id in targets:
             topic = TOPIC_CMD_DND.format(team_id=team_id, dial_id=dial_id)
@@ -2792,6 +2836,9 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         for key in ("theme_colors", "hide_when_calm"):
             if call.data.get(key) is not None:
                 payload[key] = bool(call.data[key])
+        asked = [f"ring_{k}" for k in ("theme_colors", "hide_when_calm") if payload.get(k)]
+        if asked:
+            _repairs_safely(_issues.note_firmware_gaps, hass, targets, asked)
         # live_state (default on): this integration feeds the ring from the
         # bound entities itself (see _set_perimeter_feed). Off = the caller's
         # own automations drive it with update_perimeter_state.
@@ -3053,6 +3100,33 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
             await _retire_pulse_mount(targets, src)
         await _publish_face_unmount(face_id, targets, src)
         _LOGGER.info("unmount_face: %s → %d dial(s)", face_id, len(targets))
+
+    async def _mount_climate_face(call) -> None:
+        """Mount the Climate face: the dial becomes a thermostat for one
+        climate entity. Validated like Helm's / Console's ClimatePayload
+        (_climate.py); seeded with the entity's current setpoint,
+        temperature and mode. A change made on the dial goes to Helm /
+        Console as a request for that entity (the face never actuates)."""
+        await _require_admin(call)
+        targets = _resolve_targets(hass, call.data.get("device_id"))
+        if not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_device",
+            )
+        entity_id = call.data.get("entity_id")
+        if isinstance(entity_id, list) and len(entity_id) == 1:
+            entity_id = entity_id[0]
+        state = hass.states.get(entity_id) if isinstance(entity_id, str) else None
+        try:
+            payload = _climate.build_payload(call.data, state)
+        except _climate.ClimateError as exc:
+            raise ServiceValidationError(str(exc)) from None
+        _repairs_safely(_issues.note_firmware_gaps, hass, targets, ["climate_face"])
+        await _publish_face_mount(
+            _climate.FACE_ID, payload, targets, retained=True, src=await _call_source(call)
+        )
+        _LOGGER.info("mount_climate_face: %s → %d dial(s)", payload["entity_id"], len(targets))
 
     async def _add_menu_item(call) -> None:
         """Add (or update) a temporary menu item on the targeted dials.
@@ -3922,6 +3996,8 @@ def _register_services(hass: HomeAssistant, entry: DeckhandConfigEntry) -> None:
         hass.services.async_register(DOMAIN, "mount_face", _mount_face)
     if not hass.services.has_service(DOMAIN, "unmount_face"):
         hass.services.async_register(DOMAIN, "unmount_face", _unmount_face)
+    if not hass.services.has_service(DOMAIN, "mount_climate_face"):
+        hass.services.async_register(DOMAIN, "mount_climate_face", _mount_climate_face)
     if not hass.services.has_service(DOMAIN, "add_menu_item"):
         hass.services.async_register(DOMAIN, "add_menu_item", _add_menu_item)
     if not hass.services.has_service(DOMAIN, "remove_menu_item"):

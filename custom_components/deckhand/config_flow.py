@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
 )
 
+from . import _issues, _repairs
 from .const import (
     CONF_BINDING_DIAL,
     CONF_BINDING_ENTITY,
@@ -64,6 +65,19 @@ def _unique_id(team_id: str) -> str:
     return f"deckhand_{team_id}"
 
 
+def summary_dial_lines(store: dict[str, Any]) -> list[str]:
+    """One Markdown line per dial this entry has heard from, by name."""
+    labels = store.get("labels") or {}
+    lines = []
+    for dial_id in sorted(store.get("dials") or {}):
+        label = labels.get(dial_id)
+        heartbeat = (store.get("dials") or {}).get(dial_id) or {}
+        fw = heartbeat.get("fw_ver")
+        name = f"{label} ({dial_id})" if label else dial_id
+        lines.append(f"- {name}" + (f" — firmware {fw}" if fw else ""))
+    return lines
+
+
 class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Deckhand."""
 
@@ -89,15 +103,38 @@ class DeckhandConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(_unique_id(team_id))
                 self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(
-                    title=_entry_title(team_id),
-                    data={CONF_TEAM_ID: team_id},
-                )
+                self._team_id = team_id
+                return await self.async_step_finish()
 
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
+        )
+
+    async def async_step_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """What happens next, before the entry is created: dials appear as
+        they check in, the blueprints to import, and the docs. Submitting
+        creates the entry; the same page is in the options (Dials,
+        blueprints and docs) for later."""
+        team_id = getattr(self, "_team_id", None)
+        if team_id is None:
+            return await self.async_step_user()
+        if user_input is not None:
+            return self.async_create_entry(
+                title=_entry_title(team_id),
+                data={CONF_TEAM_ID: team_id},
+            )
+        return self.async_show_form(
+            step_id="finish",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "team_id": team_id,
+                "links": _repairs.blueprint_links_markdown(),
+                "docs": _repairs.DOCS_URL,
+            },
         )
 
     async def async_step_mqtt(self, discovery_info: Any) -> ConfigFlowResult:
@@ -308,7 +345,29 @@ class DeckhandOptionsFlow(OptionsFlow):
         """Show the menu of options actions."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add", "remove", "done"],
+            menu_options=["summary", "add", "remove", "done"],
+        )
+
+    async def async_step_summary(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The dials this entry has heard from, whether the blueprints are
+        imported (with import links), and the docs. Read-only."""
+        if user_input is not None:
+            return await self.async_step_init()
+        store = self.hass.data.get(DOMAIN, {}).get(self._entry_id) or {}
+        dials = summary_dial_lines(store)
+        imported = await _issues.async_blueprints_imported(self.hass)
+        return self.async_show_form(
+            step_id="summary",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "count": str(len(dials)),
+                "dials": "\n".join(dials) or "-",
+                "blueprints": "imported" if imported else "not imported yet",
+                "links": _repairs.blueprint_links_markdown(),
+                "docs": _repairs.DOCS_URL,
+            },
         )
 
     async def async_step_add(

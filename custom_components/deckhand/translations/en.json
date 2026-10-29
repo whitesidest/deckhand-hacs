@@ -17,6 +17,10 @@
         "data_description": {
           "team_id": "One MQTT topic level: letters, digits, '.', '_' or '-'. Helm uses its numeric team id; Deckhand Console uses `local`."
         }
+      },
+      "finish": {
+        "title": "Deckhand is ready",
+        "description": "Home Assistant will listen for dials on team **{team_id}**. Each dial appears as a device within a minute of its next check-in; dials that are offline appear when they come back.\n\nNext: import the ready-made automations (each link opens the import dialog in your Home Assistant):\n{links}\n\nThen build your own: pick a dial as a **Device** in the automation editor for its triggers (button, menu item, NFC tap, timer, invitation, Do Not Disturb) and actions. Docs: {docs}\n\nThis page is also under the integration's **Configure → Dials, blueprints and docs**."
       }
     },
     "error": {
@@ -36,6 +40,7 @@
         "title": "Deckhand options",
         "description": "Manage which media_player entities auto-push now-playing updates to your dials.",
         "menu_options": {
+          "summary": "Dials, blueprints and docs",
           "add": "Add a media_player binding",
           "remove": "Remove a binding",
           "done": "Save and close"
@@ -55,6 +60,10 @@
         "data": {
           "remove": "Bindings to remove"
         }
+      },
+      "summary": {
+        "title": "Dials, blueprints and docs",
+        "description": "**{count}** dial(s) found on this team:\n{dials}\n\nA dial shows up here after its first check-in since Home Assistant started.\n\nBlueprints: {blueprints}. Import links:\n{links}\n\nDocs: {docs}"
       }
     },
     "error": {
@@ -263,6 +272,30 @@
     },
     "menu_item_entity_wrong_domain": {
       "message": "{entity_id} cannot be the entity of a {item_type} menu item. Set action_data.entity_id to a {domains} entity. Nothing was sent to the dial."
+    }
+  },
+  "issues": {
+    "firmware_too_old": {
+      "title": "Update {dial}'s firmware",
+      "description": "{dial} runs firmware {version}, which ignores something an automation or service asked of it: {features}. The command was sent but the dial did nothing with it. Update the dial to firmware {required} or later from Helm or Deckhand Console; this notice clears by itself on the dial's first check-in on new enough firmware."
+    },
+    "dial_offline": {
+      "title": "{dial} has been offline for {hours} hours",
+      "description": "Home Assistant has not heard from {dial} for {hours} hours, so its automations, announcements and timers are not reaching it. Check that it has power and Wi-Fi (a dial that cannot join Wi-Fi shows its setup screen). This notice clears by itself when the dial checks in again; if the dial is gone for good, remove it in Helm or Deckhand Console."
+    },
+    "blueprints_not_imported": {
+      "title": "Import the Deckhand blueprints",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Import the Deckhand blueprints",
+            "description": "Ready-made automations for your dials. Each link opens the import dialog in your own Home Assistant:\n{links}\n\nImport the ones you want, then select **Submit** to check. You only need one for this notice to go away; ignore it if you don't want any."
+          }
+        },
+        "error": {
+          "still_missing": "No Deckhand blueprint is in config/blueprints/automation yet. Import one with a link above, then submit again."
+        }
+      }
     }
   },
   "services": {
