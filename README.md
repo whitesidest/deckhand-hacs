@@ -24,7 +24,7 @@ HACS-compatible custom integration that makes Deckhand smart dials first-class H
 | Show any face | `deckhand.mount_face`, `deckhand.unmount_face` | | |
 | Clock, haptics, time zone | `deckhand.set_dial_settings`, `deckhand.set_timezone` | | |
 | Sundowner sunset | `deckhand.set_sunset` | | |
-| React to presses and turns | | `deckhand_dial_event` | |
+| React to presses | Device triggers (see below) | Button, Menu, Invitation, NFC events; `deckhand_dial_event` | |
 | Dial health | `deckhand.reboot` | Battery, WiFi Signal, Connectivity, Reboot button; **Download diagnostics** on the device page | |
 
 Every service also takes a Room device, and `device_id: all` (YAML) reaches every dial.
@@ -130,6 +130,13 @@ Each Deckhand dial creates the following entities:
 | Entity | Description |
 |--------|-------------|
 | Timer | `started`, `completed` or `cancelled` for the dial's timer |
+| Button | `press` (any press on the dial), `long_press`, `double_tap` — attributes `item_id`, `item_label`, `action` |
+| Menu | `item_selected` (a plain menu item, e.g. one from `deckhand.add_menu_item`), `opened`, `closed`, `timed_out` |
+| Invitation | The guest's answer to `deckhand.send_invitation`: `accepted`, `declined`, `expired`, `cancelled` |
+| NFC | `known`, `unknown`, `revoked` card, with `identity` and `role`. Appears after the dial's first tap that Helm / Deckhand Console relays (most dials have no reader) |
+
+None of them restores a past event after a restart or goes unavailable with
+the dial, so a state trigger on one only fires for a new event.
 
 ### Diagnostics
 
@@ -208,6 +215,32 @@ service: deckhand.reboot
 data:
   device_id: <ha_device_id>
 ```
+
+## Automations without YAML: device triggers and actions
+
+Pick the dial as a **Device** in the automation editor.
+
+**Triggers** (dial devices): any button pressed · long-pressed ·
+double-tapped · menu item selected (optionally only the item with a given
+label) · NFC card tapped (known / unknown / revoked) · invitation accepted /
+declined / expired / cancelled · timer started / completed / cancelled · Do
+Not Disturb turned on / off. `trigger.item_id`, `trigger.item_label` and
+`trigger.action` carry what was pressed.
+
+- There is no "rotated" trigger: the dial does not report turns of the knob.
+- "Any button pressed" leaves out the sensor faces' value requests and the
+  TV remote's volume detents, which would otherwise fire on every click.
+- NFC triggers come from the Helm / Deckhand Console relay (the only path
+  that knows whose card it was), so they need that server's Home Assistant
+  integration configured, and show up once the dial has relayed a tap.
+- `deckhand.add_menu_item`'s `key` is not in the press: match the item by
+  its label.
+
+**Actions** (dials and Rooms): send an announcement (optionally with a
+camera snapshot) · start a timer · change the theme · Do Not Disturb on /
+off · show a message · show a library face (once the face library has
+synced). Each runs the matching `deckhand.*` service, so it behaves exactly
+like calling the service.
 
 ## Events
 

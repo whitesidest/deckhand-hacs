@@ -1509,8 +1509,10 @@ add_menu_item:
       name: Key
       description: >
         Your idempotency handle. Re-adding with the same key updates the
-        item in place; remove_menu_item deletes by this key. Also echoed
-        in the dial press event so automations can branch on it.
+        item in place; remove_menu_item deletes by this key. The key is
+        NOT in the dial's press event — a press carries only item_id (the
+        server's id for the item) and item_label — so branch on the label:
+        the "Menu item selected" device trigger takes it as an option.
       required: true
       example: "garage_open"
       selector:

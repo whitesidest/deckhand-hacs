@@ -17,6 +17,10 @@ CONF_BINDING_ENTITY = "entity_id"
 # chatter doesn't spam the dial.
 MEDIA_PLAYER_DEBOUNCE_S = 0.5
 
+# The bus event every dial event is re-fired as (and Helm / Console relay
+# to). Device triggers and event entities listen to it.
+EVENT_DIAL_EVENT = f"{DOMAIN}_dial_event"
+
 # MQTT topic templates — {team_id} and {dial_id} are substituted at runtime
 TOPIC_STATUS = "deckhand/{team_id}/dial/+/status"
 TOPIC_EVENT = "deckhand/{team_id}/dial/+/event"
