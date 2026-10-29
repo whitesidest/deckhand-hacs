@@ -63,6 +63,55 @@
       "unknown_dial": "The selected device is not a Deckhand dial on this integration."
     }
   },
+  "device_automation": {
+    "trigger_type": {
+      "button_pressed": "Any button pressed",
+      "long_pressed": "Long-pressed",
+      "double_tapped": "Double-tapped",
+      "menu_item_selected": "Menu item selected",
+      "nfc_tap": "NFC card tapped: {subtype}",
+      "invitation_response": "Invitation {subtype}",
+      "timer": "Timer {subtype}",
+      "dnd": "Do Not Disturb {subtype}"
+    },
+    "trigger_subtype": {
+      "known": "known card",
+      "unknown": "unknown card",
+      "revoked": "revoked card",
+      "accepted": "accepted",
+      "declined": "declined",
+      "expired": "expired",
+      "cancelled": "cancelled",
+      "started": "started",
+      "completed": "completed",
+      "turned_on": "turned on",
+      "turned_off": "turned off"
+    },
+    "action_type": {
+      "send_announcement": "Send an announcement",
+      "start_timer": "Start a timer",
+      "push_theme": "Change the theme",
+      "dnd_on": "Turn on Do Not Disturb",
+      "dnd_off": "Turn off Do Not Disturb",
+      "show_message": "Show a message",
+      "mount_library_face": "Show a library face"
+    },
+    "extra_fields": {
+      "item_label": "Only this item (label)",
+      "message": "Message",
+      "from_name": "From",
+      "duration": "Duration (seconds; empty = until touched)",
+      "snapshot_entity": "Camera snapshot",
+      "image_url": "Image URL",
+      "minutes": "Minutes",
+      "label": "Label",
+      "name": "Timer name",
+      "color": "Ring color (#RRGGBB)",
+      "theme": "Theme",
+      "text": "Message",
+      "face": "Face"
+    }
+  },
   "entity": {
     "binary_sensor": {
       "connectivity": {
@@ -88,6 +137,56 @@
             "state": {
               "started": "Started",
               "completed": "Completed",
+              "cancelled": "Cancelled"
+            }
+          }
+        }
+      },
+      "button": {
+        "name": "Button",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "press": "Press",
+              "long_press": "Long press",
+              "double_tap": "Double tap"
+            }
+          }
+        }
+      },
+      "menu": {
+        "name": "Menu",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "item_selected": "Item selected",
+              "opened": "Opened",
+              "closed": "Closed",
+              "timed_out": "Timed out"
+            }
+          }
+        }
+      },
+      "nfc": {
+        "name": "NFC",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "known": "Known card",
+              "unknown": "Unknown card",
+              "revoked": "Revoked card"
+            }
+          }
+        }
+      },
+      "invitation": {
+        "name": "Invitation",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "accepted": "Accepted",
+              "declined": "Declined",
+              "expired": "Expired",
               "cancelled": "Cancelled"
             }
           }

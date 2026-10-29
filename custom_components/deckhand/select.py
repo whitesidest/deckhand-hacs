@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from ._automation import theme_options
 from ._source import dumps_with_source
 from .const import (
     DOMAIN,
@@ -88,12 +89,9 @@ class DeckhandThemeSelect(DeckhandEntity, SelectEntity):
         ``self.hass``.
         """
         store = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
-        themes = store.get("themes") or []
-        slugs = [t["slug"] for t in themes if isinstance(t, dict) and t.get("slug")]
-        base = slugs or list(FALLBACK_THEMES)
-        # Always offer the server-resolved sentinels (e.g. "random") first,
-        # regardless of catalog — they never appear in themes/list.
-        return [t for t in SERVER_RESOLVED_THEMES if t not in base] + base
+        # The server-resolved sentinels ("random") come first; they never
+        # appear in themes/list (_automation.theme_options).
+        return theme_options(store)
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected theme — asks Helm via theme_request.
