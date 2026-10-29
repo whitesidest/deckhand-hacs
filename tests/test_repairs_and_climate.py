@@ -4,13 +4,17 @@ Pinned here:
 
 * ``_repairs``: version parsing (a bench ``0.4.0-lan`` build is never "too
   old"), the gates, the offline arithmetic, and that BLUEPRINT_FILES is the
-  repository's blueprints folder exactly.
+  repository's blueprints folder exactly, with byte-identical copies
+  packaged in the integration (1.27.0).
 * ``_issues`` against a fake issue registry: a firmware issue per dial,
   widened by a second feature and cleared by the first heartbeat on new
   enough firmware (after a restart, only once every gate is met); an
   offline issue at 24 h — counted from startup for a dial not heard since —
   cleared by a heartbeat or a deregister; the blueprints issue raised and
-  cleared from what is on disk, and its fix flow.
+  cleared from what is on disk, and its fix flow: Submit installs the
+  missing blueprints into config/blueprints/automation/deckhand/ (never
+  overwriting one already there), refreshes the automation blueprint cache
+  and clears the issue; a failed copy shows an error and keeps it.
 * The REAL services: ``set_dnd`` / ``mount_perimeter_ring`` /
   ``mount_climate_face`` raise the firmware issue on an old dial and still
   publish; ``mount_climate_face`` validates like Helm's ClimatePayload,
@@ -148,10 +152,17 @@ class PureRepairs(unittest.TestCase):
         self.assertEqual(REP.seconds_silent("garbage", start, now), 30 * 3600)
 
     def test_blueprint_list_is_the_repository_folder(self):
-        on_disk = sorted(p.name for p in (ROOT / "blueprints" / "automation" / "deckhand").glob("*.yaml"))
+        source = ROOT / "blueprints" / "automation" / "deckhand"
+        on_disk = sorted(p.name for p in source.glob("*.yaml"))
         self.assertEqual(sorted(REP.BLUEPRINT_FILES), on_disk)
-        # Not inside the integration package (so the fix links, not copies).
-        self.assertEqual([p for p in COMPONENT.rglob("*.yaml") if p.name in REP.BLUEPRINT_FILES], [])
+        # The package carries the same files (HACS installs only
+        # custom_components/deckhand), byte for byte, and only those.
+        packaged = Path(ISS.PACKAGED_BLUEPRINTS_DIR)
+        self.assertEqual(packaged, COMPONENT / "blueprints" / "automation")
+        self.assertEqual(sorted(p.name for p in packaged.iterdir()), on_disk)
+        for name in REP.BLUEPRINT_FILES:
+            self.assertEqual((packaged / name).read_bytes(), (source / name).read_bytes(),
+                             f"{name}: packaged copy differs from blueprints/automation/deckhand/")
 
     def test_import_links(self):
         url = REP.blueprint_import_url("nfc_known_tap_scene.yaml")
@@ -254,12 +265,24 @@ class BlueprintsIssue(unittest.TestCase):
         async def _executor(func, *args):
             return func(*args)
 
-        self.hass = types.SimpleNamespace(config=_Config(self.tmp.name), async_add_executor_job=_executor)
+        self.hass = types.SimpleNamespace(config=_Config(self.tmp.name), async_add_executor_job=_executor,
+                                          data={})
 
-    def put(self, folder, name):
+    def put(self, folder, name, text="blueprint: {}\n"):
         path = os.path.join(self.tmp.name, "blueprints", "automation", folder)
         os.makedirs(path, exist_ok=True)
-        Path(path, name).write_text("blueprint: {}\n")
+        Path(path, name).write_text(text)
+
+    def installed(self, folder="deckhand"):
+        path = Path(self.tmp.name, "blueprints", "automation", folder)
+        return sorted(p.name for p in path.iterdir()) if path.is_dir() else []
+
+    def flow(self):
+        flow = asyncio.run(FLOW.async_create_fix_flow(self.hass, "blueprints_not_imported", None))
+        flow.hass = self.hass
+        flow.async_show_form = lambda **kw: {"type": "form", **kw}
+        flow.async_create_entry = lambda **kw: {"type": "create_entry", **kw}
+        return flow
 
     def test_raised_until_one_is_imported(self):
         self.assertFalse(asyncio.run(ISS.async_check_blueprints(self.hass)))
@@ -272,21 +295,67 @@ class BlueprintsIssue(unittest.TestCase):
         self.assertTrue(asyncio.run(ISS.async_check_blueprints(self.hass)))
         self.assertNotIn("blueprints_not_imported", self.ir.issues)
 
-    def test_fix_flow_rechecks_on_submit(self):
-        flow = asyncio.run(FLOW.async_create_fix_flow(self.hass, "blueprints_not_imported", None))
-        flow.hass = self.hass
-        flow.async_show_form = lambda **kw: {"type": "form", **kw}
-        flow.async_create_entry = lambda **kw: {"type": "create_entry", **kw}
+    def test_fix_flow_installs_on_submit(self):
+        self.assertFalse(asyncio.run(ISS.async_check_blueprints(self.hass)))
+        self.assertIn("blueprints_not_imported", self.ir.issues)
+        reset = mock.AsyncMock()
+        self.hass.data["blueprint"] = {"automation": types.SimpleNamespace(async_reset_cache=reset)}
+        flow = self.flow()
         first = asyncio.run(flow.async_step_init())
         self.assertEqual((first["type"], first["step_id"], first["errors"]), ("form", "confirm", {}))
         self.assertIn("my.home-assistant.io", first["description_placeholders"]["links"])
-        again = asyncio.run(flow.async_step_confirm({}))
-        self.assertEqual(again["errors"], {"base": "still_missing"})
-        self.put("deckhand", "nfc_known_tap_scene.yaml")
+        self.assertEqual(self.installed(), [], "the form alone must not write anything")
         done = asyncio.run(flow.async_step_confirm({}))
         self.assertEqual(done["type"], "create_entry")
+        # Positive control: every shipped blueprint is now on disk, the
+        # packaged bytes exactly, so the issue is gone and stays gone.
+        self.assertEqual(self.installed(), sorted(REP.BLUEPRINT_FILES))
+        for name in REP.BLUEPRINT_FILES:
+            self.assertEqual(Path(self.tmp.name, "blueprints", "automation", "deckhand", name).read_bytes(),
+                             (COMPONENT / "blueprints" / "automation" / name).read_bytes())
+        self.assertNotIn("blueprints_not_imported", self.ir.issues)
+        self.assertTrue(asyncio.run(ISS.async_check_blueprints(self.hass)))
+        reset.assert_awaited_once()
         with self.assertRaises(ValueError):
             asyncio.run(FLOW.async_create_fix_flow(self.hass, "dial_offline_X", None))
+
+    def test_never_overwrites(self):
+        edited = "blueprint: {name: mine}\n# edited by hand\n"
+        self.put("deckhand", "dnd_hold_calls.yaml", edited)
+        self.put("whitesidest", "nfc_known_tap_scene.yaml", edited)  # a GitHub import
+        copied = asyncio.run(ISS.async_install_blueprints(self.hass))  # no blueprint data: no reset
+        self.assertNotIn("dnd_hold_calls.yaml", copied)
+        self.assertNotIn("nfc_known_tap_scene.yaml", copied)
+        self.assertEqual(len(copied), len(REP.BLUEPRINT_FILES) - 2)
+        self.assertEqual(
+            Path(self.tmp.name, "blueprints", "automation", "deckhand", "dnd_hold_calls.yaml").read_text(), edited)
+        self.assertEqual(
+            Path(self.tmp.name, "blueprints", "automation", "whitesidest", "nfc_known_tap_scene.yaml").read_text(),
+            edited)
+        self.assertNotIn("nfc_known_tap_scene.yaml", self.installed(), "no duplicate of an imported one")
+        # A second run has nothing left to do.
+        self.assertEqual(asyncio.run(ISS.async_install_blueprints(self.hass)), [])
+
+    def test_copy_failure_keeps_the_issue(self):
+        asyncio.run(ISS.async_check_blueprints(self.hass))
+        # A file where the deckhand folder should be: makedirs fails.
+        os.makedirs(os.path.join(self.tmp.name, "blueprints", "automation"))
+        Path(self.tmp.name, "blueprints", "automation", "deckhand").write_text("not a folder")
+        flow = self.flow()
+        with self.assertLogs(FLOW._LOGGER, "WARNING"):
+            result = asyncio.run(flow.async_step_confirm({}))
+        self.assertEqual((result["type"], result["errors"]), ("form", {"base": "install_failed"}))
+        self.assertIn("blueprints_not_imported", self.ir.issues)
+
+    def test_partial_copy_is_removed(self):
+        def _broken(src, out):
+            out.write(b"half")
+            raise OSError("disk full")
+
+        with mock.patch.object(ISS.shutil, "copyfileobj", _broken):
+            with self.assertRaises(OSError):
+                ISS.install_blueprint_files(self.tmp.name)
+        self.assertEqual(self.installed(), [])
 
 
 # ---------------------------------------------------------------- real services
@@ -455,6 +524,10 @@ class Translations(unittest.TestCase):
         fix = issues["blueprints_not_imported"]["fix_flow"]
         self.assertIn("{links}", fix["step"]["confirm"]["description"])
         self.assertIn("still_missing", fix["error"])
+        self.assertIn("install_failed", fix["error"])
+        self.assertIn("config/blueprints/automation/deckhand", fix["step"]["confirm"]["description"])
+        self.assertEqual(strings["issues"],
+                         json.loads((COMPONENT / "translations" / "en.json").read_text(encoding="utf-8"))["issues"])
         self.assertIn("{links}", strings["config"]["step"]["finish"]["description"])
         self.assertIn("summary", strings["options"]["step"]["init"]["menu_options"])
         for key in ("{count}", "{dials}", "{blueprints}", "{links}", "{docs}"):

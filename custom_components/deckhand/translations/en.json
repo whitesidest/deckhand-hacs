@@ -284,15 +284,16 @@
       "description": "Home Assistant has not heard from {dial} for {hours} hours, so its automations, announcements and timers are not reaching it. Check that it has power and Wi-Fi (a dial that cannot join Wi-Fi shows its setup screen). This notice clears by itself when the dial checks in again; if the dial is gone for good, remove it in Helm or Deckhand Console."
     },
     "blueprints_not_imported": {
-      "title": "Import the Deckhand blueprints",
+      "title": "Add the Deckhand blueprints",
       "fix_flow": {
         "step": {
           "confirm": {
-            "title": "Import the Deckhand blueprints",
-            "description": "Ready-made automations for your dials. Each link opens the import dialog in your own Home Assistant:\n{links}\n\nImport the ones you want, then select **Submit** to check. You only need one for this notice to go away; ignore it if you don't want any."
+            "title": "Add the Deckhand blueprints",
+            "description": "Ready-made automations for your dials. Select **Submit** to add all 7 Deckhand blueprints to config/blueprints/automation/deckhand/; they then appear under **Settings → Automations & scenes → Blueprints**. A blueprint file already there is left as it is.\n\nOr import only the ones you want; each link opens the import dialog in your own Home Assistant:\n{links}\n\nIgnore this notice if you don't want any."
           }
         },
         "error": {
+          "install_failed": "Could not write to config/blueprints/automation/deckhand (the Home Assistant log has the reason). Check that folder's permissions and submit again, or import the blueprints with the links above.",
           "still_missing": "No Deckhand blueprint is in config/blueprints/automation yet. Import one with a link above, then submit again."
         }
       }

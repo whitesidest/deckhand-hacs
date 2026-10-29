@@ -1,0 +1,35 @@
+blueprint:
+  name: "Deckhand: revoked NFC tap alert"
+  description: >-
+    Send a notification whenever a revoked card is tapped on any Deckhand
+    dial — a revoked card in use is a breach signal, so this fires at any
+    hour. Triggers only on the Helm-enriched relay event — the raw MQTT
+    re-fire carries no `action` key and never matches.
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/nfc_revoked_tap_alert.yaml
+  input:
+    notify_service:
+      name: Notify service
+      description: >-
+        Notification service to call, e.g. "notify.mobile_app_your_phone".
+      default: notify.notify
+      selector:
+        text: {}
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: event
+    event_type: deckhand_dial_event
+    event_data:
+      event_type: nfc_tap
+      action: revoked
+
+action:
+  - service: !input notify_service
+    data:
+      title: "Deckhand: REVOKED card tap"
+      message: >-
+        Revoked card ({{ trigger.event.data.item_label }}) tapped on dial
+        {{ trigger.event.data.dial_id }} at {{ now().strftime('%H:%M:%S') }}.

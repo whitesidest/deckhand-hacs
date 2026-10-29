@@ -10,14 +10,17 @@ blueprints not imported.
   Home Assistant saw, or from startup for a dial that has not reported
   since. Cleared by the next heartbeat or by deregistering the dial.
 * **Blueprints not imported** — none of the shipped blueprints is under
-  ``config/blueprints/automation/``. The integration package does not carry
-  them (HACS installs ``custom_components/deckhand`` only), so the fix flow
-  (repairs.py) lists My Home Assistant import links and re-checks.
+  ``config/blueprints/automation/``. The package carries copies (HACS
+  installs ``custom_components/deckhand`` only, not the repository's
+  ``blueprints/``), so the fix flow (repairs.py) installs them into
+  ``config/blueprints/automation/deckhand/``; the My Home Assistant import
+  links stay as the alternative.
 """
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -31,6 +34,8 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 BLUEPRINTS_ISSUE_ID = "blueprints_not_imported"
+# The packaged copies of the repository's blueprints/automation/deckhand/.
+PACKAGED_BLUEPRINTS_DIR = os.path.join(os.path.dirname(__file__), "blueprints", "automation")
 
 
 def firmware_issue_id(dial_id: str) -> str:
@@ -182,6 +187,53 @@ def scan_blueprint_files(config_dir: str) -> list[str]:
         except OSError:
             continue
     return found
+
+
+def install_blueprint_files(config_dir: str, source_dir: str = PACKAGED_BLUEPRINTS_DIR) -> list[str]:
+    """Copy every shipped blueprint not already under
+    ``<config>/blueprints/automation/*/`` into
+    ``<config>/blueprints/automation/deckhand/``. Never overwrites: a file of
+    that name anywhere there (possibly edited, or a GitHub import in
+    ``whitesidest/``) is left alone. Returns the names copied. Raises
+    OSError when a copy fails. Blocking I/O: run in the executor."""
+    present = set(scan_blueprint_files(config_dir))
+    dest = os.path.join(config_dir, "blueprints", "automation", _repairs.BLUEPRINT_INSTALL_FOLDER)
+    os.makedirs(dest, exist_ok=True)
+    copied: list[str] = []
+    for name in _repairs.BLUEPRINT_FILES:
+        if name in present:
+            continue
+        target = os.path.join(dest, name)
+        with open(os.path.join(source_dir, name), "rb") as src:
+            try:
+                out = open(target, "xb")  # "x": fails rather than overwrite
+            except FileExistsError:
+                continue
+            try:
+                with out:
+                    shutil.copyfileobj(src, out)
+            except OSError:
+                os.remove(target)  # no half-written blueprint left behind
+                raise
+        copied.append(name)
+    return copied
+
+
+async def async_install_blueprints(hass: HomeAssistant) -> list[str]:
+    """Install the missing shipped blueprints, then have the automation
+    editor read the folder afresh. Raises OSError when a copy fails."""
+    copied = await hass.async_add_executor_job(install_blueprint_files, hass.config.config_dir)
+    # The blueprint integration keeps one DomainBlueprints per domain in
+    # hass.data["blueprint"]; drop the automation one's cache so the new
+    # files are read from disk (absent when blueprint has not set up yet,
+    # and then there is nothing cached).
+    domain_blueprints = (hass.data.get("blueprint") or {}).get("automation")
+    reset = getattr(domain_blueprints, "async_reset_cache", None)
+    if reset is not None:
+        await reset()
+    if copied:
+        _LOGGER.info("Installed Deckhand blueprints: %s", ", ".join(copied))
+    return copied
 
 
 async def async_blueprints_imported(hass: HomeAssistant) -> bool:
