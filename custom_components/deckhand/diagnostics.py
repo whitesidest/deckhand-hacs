@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 
+from . import _faces
 from .const import CONF_BINDING_DIAL, CONF_MEDIA_PLAYER_BINDINGS, DOMAIN
 
 # Credential-like keys, plus the ones that pin down the network: the dial's
@@ -66,6 +67,31 @@ def _dial_diagnostics(store: dict[str, Any], dial_id: str) -> dict[str, Any]:
     }
 
 
+def _face_library_diagnostics(store: dict[str, Any]) -> dict[str, Any]:
+    """The synced face library (face sync plane), in numbers."""
+    faces = store.get("faces") or {}
+    index = faces.get("index")
+    items = faces.get("items") or {}
+    if index is None:
+        return {"available": False, "cached_records": len(items)}
+    entries = index.get("faces") or []
+    return {
+        "available": True,
+        "server": index.get("server"),
+        "plane_version": index.get("v"),
+        "index_updated_at": index.get("updated_at"),
+        "faces": len(entries),
+        "system_faces": sum(1 for f in entries if f.get("system")),
+        "disabled_faces": sum(1 for f in entries if not f.get("enabled")),
+        "truncated": bool(index.get("truncated")),
+        "kinds": list(index.get("kinds") or []),
+        "max_payload_bytes": index.get("max_payload_bytes"),
+        "cached_records": len(items),
+        "live_records": len(_faces.live_items(items, index)),
+        "pending_requests": len(faces.get("pending") or {}),
+    }
+
+
 def _media_bindings(entry: ConfigEntry) -> list[Any]:
     return list(entry.options.get(CONF_MEDIA_PLAYER_BINDINGS, []) or [])
 
@@ -84,6 +110,7 @@ async def async_get_config_entry_diagnostics(
         },
         "team_id": store.get("team_id"),
         "theme_catalog_size": len(store.get("themes") or []),
+        "face_library": _face_library_diagnostics(store),
         "rooms": [
             {"id": gid, "name": g.get("name"), "dial_ids": list(g.get("dial_ids", []))}
             for gid, g in (store.get("groups") or {}).items()

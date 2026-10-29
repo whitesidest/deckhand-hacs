@@ -21,7 +21,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from . import _faces
+from .const import DOMAIN, SIGNAL_FACES_UPDATED
 from .entity import DeckhandEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,6 +113,11 @@ async def async_setup_entry(
                 continue
             entities.append(DeckhandSensor(dial_id, data, defn))
 
+        # Which face the dial is wearing, from its own heartbeat (firmware
+        # face_report). Created for every dial: unavailable until the
+        # firmware reports, so an OTA brings it to life without a restart.
+        entities.append(DeckhandShowingSensor(dial_id, data, entry))
+
         if entities:
             async_add_entities(entities)
             _LOGGER.debug("Added %d sensors for %s", len(entities), dial_id)
@@ -160,3 +166,102 @@ class DeckhandSensor(DeckhandEntity, SensorEntity):
         if value is None:
             return None
         return value
+
+
+class DeckhandShowingSensor(DeckhandEntity, SensorEntity):
+    """What the dial is showing, as the dial itself reports it.
+
+    Firmware with the ``face_report`` feature puts
+    ``"face": {"id", "slot", "since_s"[, "ref"]}`` and ``"ring"`` in every
+    heartbeat. The state is the library face's name when ``ref`` (the face
+    uid the server stamped on the mount) is in the synced face library with
+    the kind the dial reports; otherwise a friendly kind ("Readings face",
+    "Home clock").
+
+    On firmware without the report the sensor is unavailable, never a
+    made-up "none": an automation must be able to tell "showing nothing in
+    particular" from "this dial can't say".
+    """
+
+    _attr_translation_key = "showing"
+    _attr_icon = "mdi:image-frame"
+
+    def __init__(self, dial_id: str, data: dict[str, Any], entry: ConfigEntry) -> None:
+        super().__init__(dial_id, data)
+        self._entry = entry
+        self._attr_unique_id = f"deckhand_{dial_id}_showing"
+        self._since_key: tuple | None = None
+        self._since: str | None = None
+        self._last_uptime: int | None = None
+        self._update_since(data)
+
+    def _index(self) -> dict[str, Any] | None:
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            return None
+        store = (hass.data.get(DOMAIN) or {}).get(self._entry.entry_id) or {}
+        return (store.get("faces") or {}).get("index")
+
+    def _update_since(self, data: dict[str, Any]) -> None:
+        """Absolute time the face went up. Recomputed only when the report
+        changes or the dial rebooted, so heartbeat jitter doesn't rewrite
+        the attribute every 30 s."""
+        report = _faces.face_report(data)
+        uptime = data.get("uptime_s") if isinstance(data.get("uptime_s"), int) else None
+        rebooted = (
+            uptime is not None and self._last_uptime is not None and uptime < self._last_uptime
+        )
+        self._last_uptime = uptime
+        if report is None:
+            self._since_key, self._since = None, None
+            return
+        key = (report["id"], report["slot"], report["since_s"], report["ref"])
+        if key == self._since_key and not rebooted and self._since is not None:
+            return
+        since = _faces.showing_since(data, report)
+        self._since_key = key
+        self._since = since.isoformat() if since else None
+
+    def _on_status(self, data: dict[str, Any]) -> None:
+        super()._on_status(data)
+        self._update_since(data)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _faces_updated() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_FACES_UPDATED, _faces_updated)
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and _faces.face_report(self._dial_data) is not None
+
+    @property
+    def native_value(self) -> str | None:
+        report = _faces.face_report(self._dial_data)
+        if report is None:
+            return None
+        found = _faces.library_face_for(report, self._index())
+        if found is not None:
+            return found["name"]
+        return _faces.friendly_kind(report["id"], report["slot"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        report = _faces.face_report(self._dial_data)
+        if report is None:
+            return None
+        found = _faces.library_face_for(report, self._index())
+        return {
+            "face_id": report["id"],
+            "slot": report["slot"],
+            "ref": report["ref"],
+            "since": self._since,
+            "ring": _faces.ring_report(self._dial_data),
+            "in_library": found is not None,
+        }

@@ -78,6 +78,20 @@ TOPIC_SENSOR_WATCHES = "deckhand/{team_id}/dial/+/sensor_watches"
 # NOT per-dial — one beacon per team/entry.
 TOPIC_HACS_PRESENCE = "deckhand/{team_id}/hacs/presence"
 
+# Face sync plane v1 (docs/face_sync_contract.md). Helm and Console publish
+# the team's face library retained: an index (faces/list) plus one record
+# per face (faces/item/{uid}; an empty retained payload = deleted). HACS
+# writes to the library on faces/request and gets exactly one answer per
+# request_id on faces/result. All QoS 1.
+TOPIC_FACES_LIST = "deckhand/{team_id}/faces/list"
+TOPIC_FACES_ITEMS = "deckhand/{team_id}/faces/item/+"
+TOPIC_FACES_REQUEST = "deckhand/{team_id}/faces/request"
+TOPIC_FACES_RESULT = "deckhand/{team_id}/faces/result"
+# How long a face service waits for its faces/result.
+FACE_REQUEST_TIMEOUT_S = 10
+# Dispatcher signal sent whenever the face library cache changes.
+SIGNAL_FACES_UPDATED = "deckhand_faces_updated"
+
 # Phase 6 dial-platform — face dispatch topics. {face_id} is the
 # face identifier (e.g. "perimeter_ring") chosen by the firmware
 # face registry.

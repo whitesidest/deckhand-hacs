@@ -2387,9 +2387,11 @@ send_invitation:
     on_face_id:
       name: On accept — face ID
       description: >
-        Used when On Accept Type is "push_face". The numeric id of a
-        Face saved in Helm/Console — HA has no way to list a team's
-        Faces, so type the id directly.
+        Used when On Accept Type is "push_face". The face's numeric id in
+        Helm/Console, or its library uid. The face library syncs to Home
+        Assistant: create_face / update_face return a face's uid, a
+        dial's Showing sensor shows the uid of the face it wears (ref),
+        and the integration's diagnostics list the library.
       selector:
         text:
     on_message_text:
@@ -2455,5 +2457,267 @@ cancel_invitation:
       description: The same id supplied to ``send_invitation``.
       required: true
       example: "invite-bar-open-1"
+      selector:
+        text:
+
+# ── Face library (face sync plane) ──────────────────────────────────
+# These write to the team's face library in Helm / Deckhand Console and
+# wait (up to 10 s) for the server's answer, which they return as the
+# service response. Faces are picked by uid or by exact name.
+
+create_face:
+  name: Create library face
+  description: >
+    Save a new face to the team's face library in Helm / Deckhand Console.
+    It appears in the server's face library and every synced Home
+    Assistant. Returns the server's answer, including the new face's uid
+    and rev. Admin only. Needs a Helm / Console that syncs faces.
+  fields:
+    name:
+      name: Name
+      description: The face's name in the library (1–128 characters).
+      required: true
+      example: "Guest Temp"
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: >
+        The kind of face, e.g. sensor (Readings), clock, message, image,
+        blank, now_playing, charge, climate or perimeter_ring. The server
+        lists the kinds it accepts on deckhand/<team>/faces/list; the
+        integration's diagnostics show them too.
+      required: true
+      example: "sensor"
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: >
+        The face's settings, as its editor saves them (at most 3600 bytes
+        as compact JSON). Optional universal keys on hero faces: top_line,
+        lines (up to 3), brightness (0–100), idle_return_s (0 or
+        10–86400); a perimeter block adds the face's own ring.
+      example: |
+        entity_id: sensor.guest_room_temperature
+        label: Guest room
+      selector:
+        object:
+    description:
+      name: Description
+      description: Optional note shown in the library (at most 256 characters).
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Whether the face is enabled in the library. Defaults to enabled.
+      selector:
+        boolean:
+    config_entry_id:
+      name: Deckhand team
+      description: >
+        Only needed with more than one Deckhand integration entry: the team
+        whose library gets the face.
+      selector:
+        config_entry:
+          integration: deckhand
+
+update_face:
+  name: Update library face
+  description: >
+    Change a face in the team's face library. Only the fields you set are
+    changed; a payload replaces the whole payload. If someone else saved
+    the face since your copy, the server refuses the update as stale and
+    the error names the rev now in the library. Returns the server's
+    answer with the new rev. Admin only. System faces are read-only.
+  fields:
+    face:
+      name: Face
+      description: The face to change — its uid, or its exact name in the library.
+      required: true
+      example: "Guest Temp"
+      selector:
+        text:
+    base_rev:
+      name: Base revision
+      description: >
+        The rev you edited. Leave empty to use the rev Home Assistant last
+        saw in the library; set it to the rev a stale error named to
+        overwrite a newer save.
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
+    name:
+      name: Name
+      description: New name (1–128 characters).
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: New kind. The payload is re-checked against it.
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: New payload. Replaces the whole stored payload; it is never merged.
+      selector:
+        object:
+    description:
+      name: Description
+      description: New description (at most 256 characters).
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Enable or disable the face in the library.
+      selector:
+        boolean:
+    config_entry_id:
+      name: Deckhand team
+      description: Only needed when more than one Deckhand team holds a face of this name or uid.
+      selector:
+        config_entry:
+          integration: deckhand
+
+delete_face:
+  name: Delete library face
+  description: >
+    Delete a face from the team's face library. Refused when the face is
+    still in use (a schedule, menu, invitation or Composer item uses it),
+    when it changed since the rev you name, and for system faces. Admin
+    only.
+  fields:
+    face:
+      name: Face
+      description: The face to delete — its uid, or its exact name in the library.
+      required: true
+      example: "Guest Temp"
+      selector:
+        text:
+    base_rev:
+      name: Base revision
+      description: The rev you mean to delete. Leave empty to use the rev Home Assistant last saw.
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          mode: box
+    config_entry_id:
+      name: Deckhand team
+      description: Only needed when more than one Deckhand team holds a face of this name or uid.
+      selector:
+        config_entry:
+          integration: deckhand
+
+mount_library_face:
+  name: Mount library face
+  description: >
+    Put a saved library face on dials through Helm / Deckhand Console, the
+    same way their editors do: its config, sensor labels and own ring come
+    with it, it replaces the dial's current hero face, and the dial's
+    Showing sensor names it. Returns each dial's outcome (sent,
+    unknown_dial, refused). Admin only.
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s) to mount the face on. Multiple, Rooms, or "all" (YAML mode) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    face:
+      name: Face
+      description: The library face — its uid, or its exact name.
+      required: true
+      example: "Guest Temp"
+      selector:
+        text:
+    overrides:
+      name: Overrides
+      description: Optional payload keys to change for this mount only. The saved face is untouched.
+      selector:
+        object:
+
+test_face:
+  name: Test face on dial
+  description: >
+    Preview a face on dials for a while without saving anything: either a
+    library face, or an unsaved one given by kind and payload. Not
+    retained, and the dial's own face comes back by itself after ttl_s
+    (or with Clear face test). Returns the test_id to clear it with.
+    Admin only.
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s) to preview on. Multiple, Rooms, or "all" (YAML mode) supported.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    face:
+      name: Face
+      description: A library face to preview — its uid or exact name. Leave empty to preview an unsaved face (kind + payload).
+      example: "Guest Temp"
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: The kind of the unsaved face to preview (when Face is empty).
+      example: "message"
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: The unsaved face's payload (when Face is empty).
+      selector:
+        object:
+    overrides:
+      name: Overrides
+      description: Payload keys to change for this preview of a library face.
+      selector:
+        object:
+    ttl_s:
+      name: Duration
+      description: Seconds before the dial's own face comes back (30–900, default 300).
+      default: 300
+      selector:
+        number:
+          min: 30
+          max: 900
+          unit_of_measurement: s
+    test_id:
+      name: Test ID
+      description: Optional id for this test, to clear it by later. One is made up when empty.
+      selector:
+        text:
+
+clear_face_test:
+  name: Clear face test
+  description: >
+    End a face preview now and put back the face the dial was showing.
+    Admin only.
+  fields:
+    device_id:
+      name: Device
+      description: Dial(s) to clear the preview on.
+      required: true
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    test_id:
+      name: Test ID
+      description: The test_id Test face on dial returned.
+      selector:
+        text:
+    kind:
+      name: Kind
+      description: >
+        The kind of face under test. Only needed without a test_id this
+        Home Assistant started (for example after a restart).
       selector:
         text:

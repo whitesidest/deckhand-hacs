@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.24.0"  # 1.24.0 = discoverability: services.yaml descriptions + filtered pickers, diagnostics, entity translations, Brightness reflects the dial, three new blueprints
+    EXPECTED_VERSION = "1.25.0"  # 1.25.0 = face sync plane: library services (create/update/delete/mount/test/clear), Showing sensor + Ring binary sensor from the dial's face report
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
