@@ -1,0 +1,59 @@
+blueprint:
+  name: "Deckhand: known NFC tap runs a scene"
+  description: >-
+    When a known (enrolled) card is tapped on a Deckhand dial, activate a
+    scene. Optionally restrict to a single role (e.g. "Housekeeper") or a
+    single dial. Triggers only on the Helm-enriched relay event — the raw
+    MQTT re-fire carries no `action` key and never matches.
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/nfc_known_tap_scene.yaml
+  input:
+    scene:
+      name: Scene
+      description: Scene to activate on a known tap.
+      selector:
+        entity:
+          domain: scene
+    role_filter:
+      name: Role filter (optional)
+      description: >-
+        Only fire for taps by this role (exact match, e.g. "Housekeeper").
+        Leave empty to fire for any known tap.
+      default: ""
+      selector:
+        text: {}
+    dial_filter:
+      name: Dial filter (optional)
+      description: >-
+        Only fire for taps on this dial (e.g. "DECK-3AC0"). Leave empty to
+        fire for taps on any dial.
+      default: ""
+      selector:
+        text: {}
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: event
+    event_type: deckhand_dial_event
+    event_data:
+      event_type: nfc_tap
+      action: known
+
+variables:
+  role_filter: !input role_filter
+  dial_filter: !input dial_filter
+
+condition:
+  - condition: template
+    value_template: >-
+      {{ role_filter == '' or trigger.event.data.role == role_filter }}
+  - condition: template
+    value_template: >-
+      {{ dial_filter == '' or trigger.event.data.dial_id == dial_filter }}
+
+action:
+  - service: scene.turn_on
+    target:
+      entity_id: !input scene

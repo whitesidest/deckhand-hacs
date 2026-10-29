@@ -1,0 +1,84 @@
+blueprint:
+  name: "Deckhand: Do Not Disturb — hold calls"
+  description: >-
+    Mirror a dial's Do Not Disturb mode into the room: when the dial
+    enters DND, turn on a "hold calls" indicator light and notify the
+    assistant; when DND ends, turn the indicator off and notify again.
+    The Diane Lockhart flow — the dial on her desk is the truth, this
+    automation is how the rest of the office finds out. Triggers only on
+    real on/off transitions of the DND binary_sensor (an `unavailable`
+    sensor — old firmware or an offline dial — never fires either
+    branch, so calls are never released by a dial that merely rebooted).
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/dnd_hold_calls.yaml
+  input:
+    dnd_sensor:
+      name: Do Not Disturb sensor
+      description: >-
+        The dial's "Do Not Disturb" binary_sensor (created by the
+        Deckhand integration for every dial on firmware 0.4.44+).
+      selector:
+        entity:
+          integration: deckhand
+          domain: binary_sensor
+    indicator_light:
+      name: Hold-calls indicator light
+      description: >-
+        Light to turn on while the dial is in Do Not Disturb (e.g. a
+        lamp at the assistant's desk). Turned off when DND ends.
+      selector:
+        entity:
+          domain: light
+    notify_service:
+      name: Notify service
+      description: >-
+        Notification service to call, e.g. "notify.mobile_app_your_phone".
+      default: notify.notify
+      selector:
+        text: {}
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: state
+    entity_id: !input dnd_sensor
+    from: "off"
+    to: "on"
+    id: dnd_on
+  - platform: state
+    entity_id: !input dnd_sensor
+    from: "on"
+    to: "off"
+    id: dnd_off
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: dnd_on
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input indicator_light
+          - service: !input notify_service
+            data:
+              title: "Deckhand: Do Not Disturb"
+              message: >-
+                {{ trigger.to_state.attributes.friendly_name or
+                   trigger.entity_id }} is now in Do Not Disturb — hold
+                calls.
+      - conditions:
+          - condition: trigger
+            id: dnd_off
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: !input indicator_light
+          - service: !input notify_service
+            data:
+              title: "Deckhand: Do Not Disturb ended"
+              message: >-
+                {{ trigger.to_state.attributes.friendly_name or
+                   trigger.entity_id }} left Do Not Disturb — calls may
+                resume.
