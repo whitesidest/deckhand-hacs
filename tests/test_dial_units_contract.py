@@ -81,6 +81,10 @@ VALUE_VECTORS = [
     ("on", None, "ON", ""),
     ("off", None, "OFF", ""),
     ("", {"unit_of_measurement": "W"}, "", ""),
+    # A broken sensor reporting a non-finite number is no reading at all.
+    ("inf", {"unit_of_measurement": "W"}, "", ""),
+    ("-inf", None, "", ""),
+    ("nan", None, "", ""),
     (None, None, "", ""),
 ]
 

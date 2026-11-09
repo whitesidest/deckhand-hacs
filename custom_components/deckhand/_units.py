@@ -22,6 +22,7 @@ copy for the full rationale.
 """
 from __future__ import annotations
 
+import math
 import unicodedata
 from typing import Any
 
@@ -149,6 +150,10 @@ def format_sensor_value(
         f = float(s_state)
     except (TypeError, ValueError):
         return (s_state.upper() if len(s_state) <= 6 else s_state), unit
+    if not math.isfinite(f):
+        # "inf", "-inf" and "nan" parse as floats, and int() raises on them
+        # (helm Sentry c031b1d6, 2026-11-06). No dial can show one: no reading.
+        return "", ""
     if f == int(f):
         return str(int(f)), unit
     return f"{f:.1f}", unit
