@@ -90,11 +90,11 @@ def seconds_silent(last_seen: Any, watching_since: datetime, now: datetime) -> f
 
 
 # ── Blueprints ────────────────────────────────────────────────────────
-# The repository's blueprints/automation/deckhand/. HACS installs only
-# custom_components/deckhand, so they are not on disk next to the
-# integration and cannot be copied: the issue links each one to My Home
-# Assistant's import instead. tests/test_repairs.py keeps this list equal
-# to the folder.
+# The repository's blueprints/automation/deckhand/ (the README's import
+# links point there). HACS installs only custom_components/deckhand, so the
+# package carries byte-identical copies in blueprints/automation/ for the
+# Repairs fix to install. tests/test_repairs_and_climate.py keeps this list
+# equal to both folders and the copies equal to the originals.
 BLUEPRINT_FILES = (
     "dnd_hold_calls.yaml",
     "door_open_ring_flash.yaml",
@@ -107,6 +107,8 @@ BLUEPRINT_FILES = (
 BLUEPRINT_RAW_BASE = (
     "https://raw.githubusercontent.com/whitesidest/deckhand-hacs/main/blueprints/automation/deckhand/"
 )
+# Where the fix installs them: config/blueprints/automation/<this>/.
+BLUEPRINT_INSTALL_FOLDER = "deckhand"
 DOCS_URL = "https://github.com/whitesidest/deckhand-hacs#readme"
 BLUEPRINTS_DOCS_URL = "https://github.com/whitesidest/deckhand-hacs#shipped-blueprints"
 

@@ -1,0 +1,95 @@
+blueprint:
+  name: "Deckhand: doorbell snapshot announcement"
+  description: >-
+    When the doorbell rings, announce it on Deckhand dials with a snapshot
+    from the door camera behind the message. The integration fetches the
+    frame over the LAN and streams it straight to the dials; if the camera
+    can't be read, the text announcement still goes out. Works with a
+    doorbell binary_sensor (fires on off → on) or a doorbell event entity
+    (fires on each new press; the replay after a restart is ignored).
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/doorbell_snapshot_announcement.yaml
+  input:
+    doorbell:
+      name: Doorbell
+      description: >-
+        The doorbell's button: a binary_sensor that turns on when pressed,
+        or an event entity that records each press.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - event
+    camera:
+      name: Door camera
+      description: Camera to snapshot for the announcement backdrop.
+      selector:
+        entity:
+          domain: camera
+    all_dials:
+      name: Every dial
+      description: >-
+        Announce on every Deckhand dial. Turn off to announce only on the
+        dials picked below.
+      default: true
+      selector:
+        boolean: {}
+    dials:
+      name: Dials
+      description: Dials (or Rooms) to announce on when "Every dial" is off.
+      default: []
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    message:
+      name: Message
+      description: Text of the announcement.
+      default: "Someone's at the door"
+      selector:
+        text: {}
+    from_name:
+      name: From
+      description: Who the announcement is from.
+      default: "Front door"
+      selector:
+        text: {}
+    duration:
+      name: Duration
+      description: How long the announcement stays up, in seconds.
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 300
+          unit_of_measurement: seconds
+
+# One announcement per ring: presses while it is going out are dropped.
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input doorbell
+
+variables:
+  all_dials: !input all_dials
+  dials: !input dials
+
+condition:
+  - condition: template
+    value_template: >-
+      {% set f = trigger.from_state %}{% set t = trigger.to_state %}
+      {{ f is not none and t is not none and (
+           (t.domain == 'binary_sensor' and f.state == 'off' and t.state == 'on')
+           or (t.domain == 'event' and f.state != 'unavailable'
+               and t.state not in ['unavailable', 'unknown'])) }}
+
+action:
+  - service: deckhand.send_announcement
+    data:
+      device_id: "{{ 'all' if all_dials else dials }}"
+      message: !input message
+      from_name: !input from_name
+      duration: !input duration
+      snapshot_entity: !input camera

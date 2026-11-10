@@ -1,0 +1,90 @@
+blueprint:
+  name: "Deckhand: door open flashes the ring"
+  description: >-
+    While a door is open, a segment of the dials' Perimeter Ring flashes;
+    when it closes the ring slides away (and, by default, is taken down).
+    The ring is fed the door's live state by the integration, so it stops
+    flashing the moment the door shuts. This MOUNTS a one-segment ring and
+    replaces any ring already on those dials — if you run a ring with
+    other bindings, add the door to it with treatment "flash" instead.
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/door_open_ring_flash.yaml
+  input:
+    door:
+      name: Door sensor
+      description: Binary sensor that is on while the door is open.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class:
+            - door
+            - garage_door
+            - opening
+            - window
+    dials:
+      name: Dials
+      description: Dials (or Rooms) whose ring flashes.
+      selector:
+        device:
+          integration: deckhand
+          multiple: true
+    flash_color:
+      name: Flash colour
+      description: Colour of the flashing segment, as a hex colour "#RRGGBB".
+      default: "#E85848"
+      selector:
+        text: {}
+    clear_when_closed:
+      name: Take the ring down when the door closes
+      description: >-
+        On (default): clear the ring once the door closes. Off: leave it
+        mounted and hidden until the next opening.
+      default: true
+      selector:
+        boolean: {}
+
+mode: queued
+max: 5
+
+trigger:
+  - platform: state
+    entity_id: !input door
+    from: "off"
+    to: "on"
+    id: opened
+  - platform: state
+    entity_id: !input door
+    from: "on"
+    to: "off"
+    id: closed
+
+variables:
+  door: !input door
+  clear_when_closed: !input clear_when_closed
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: opened
+        sequence:
+          - service: deckhand.mount_perimeter_ring
+            data:
+              device_id: !input dials
+              bindings:
+                - id: !input door
+                  friendly_name: "{{ state_attr(door, 'friendly_name') or door }}"
+                  treatment: flash
+                  active_state: "on"
+                  active_color: !input flash_color
+              hide_when_calm: true
+              live_state: true
+      - conditions:
+          - condition: trigger
+            id: closed
+          - condition: template
+            value_template: "{{ clear_when_closed }}"
+        sequence:
+          - service: deckhand.clear_perimeter_ring
+            data:
+              device_id: !input dials

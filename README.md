@@ -40,11 +40,13 @@ Every service also takes a Room device, and `device_id: all` (YAML) reaches ever
   hide-when-calm 0.4.161). The command is still sent; the notice clears on
   the dial's first check-in on new enough firmware.
 - **A dial has been offline for a day** — clears when it checks in again.
-- **Import the Deckhand blueprints** — none of the shipped blueprints is in
-  `config/blueprints/automation/`. HACS installs only the integration, not
-  the repository's `blueprints/` folder, so the fix lists an import link
-  for each one and checks again when you submit. Ignore it if you don't
-  want them.
+- **Add the Deckhand blueprints** — none of the shipped blueprints is in
+  `config/blueprints/automation/`. Select **Submit** in the fix and the
+  integration adds all seven to `config/blueprints/automation/deckhand/`
+  (it carries copies, since HACS installs only the integration, not the
+  repository's `blueprints/` folder); a blueprint file already there is
+  never overwritten. The fix also lists an import link for each one if you
+  would rather pick. Ignore it if you don't want them.
 
 After setup, the integration shows what happens next (dials appear as they
 check in, the blueprint import links, the docs); the same page is under

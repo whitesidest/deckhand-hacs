@@ -1,0 +1,54 @@
+blueprint:
+  name: "Deckhand: unknown NFC tap alert (time window)"
+  description: >-
+    Send a notification when an unenrolled card is tapped on any Deckhand
+    dial during a configurable time window (e.g. after hours). Triggers
+    only on the Helm-enriched relay event — the raw MQTT re-fire carries
+    no `action` key and never matches.
+  domain: automation
+  source_url: https://github.com/whitesidest/deckhand-hacs/blob/main/blueprints/automation/deckhand/nfc_unknown_tap_alert.yaml
+  input:
+    notify_service:
+      name: Notify service
+      description: >-
+        Notification service to call, e.g. "notify.mobile_app_your_phone".
+      default: notify.notify
+      selector:
+        text: {}
+    after_time:
+      name: Window start
+      description: Only alert for taps at or after this time.
+      default: "22:00:00"
+      selector:
+        time: {}
+    before_time:
+      name: Window end
+      description: >-
+        Only alert for taps before this time. May be earlier than the
+        window start to span midnight (e.g. 22:00 → 06:00).
+      default: "06:00:00"
+      selector:
+        time: {}
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: event
+    event_type: deckhand_dial_event
+    event_data:
+      event_type: nfc_tap
+      action: unknown
+
+condition:
+  - condition: time
+    after: !input after_time
+    before: !input before_time
+
+action:
+  - service: !input notify_service
+    data:
+      title: "Deckhand: unknown card tap"
+      message: >-
+        Unknown card tapped on dial {{ trigger.event.data.dial_id }}
+        at {{ now().strftime('%H:%M:%S') }}.
