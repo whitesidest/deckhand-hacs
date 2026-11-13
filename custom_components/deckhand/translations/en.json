@@ -283,6 +283,25 @@
       "title": "{dial} has been offline for {hours} hours",
       "description": "Home Assistant has not heard from {dial} for {hours} hours, so its automations, announcements and timers are not reaching it. Check that it has power and Wi-Fi (a dial that cannot join Wi-Fi shows its setup screen). This notice clears by itself when the dial checks in again; if the dial is gone for good, remove it in Helm or Deckhand Console."
     },
+    "dial_silent_since_start": {
+      "title": "{dial} hasn't reported since Home Assistant started ({hours} hours)",
+      "description": "Your Deckhand server still has {dial}, but it has not checked in since Home Assistant started {hours} hours ago, so its automations, announcements and timers are not reaching it. Home Assistant cannot tell how long it was quiet before that. Check that it has power and Wi-Fi (a dial that cannot join Wi-Fi shows its setup screen). This notice clears by itself when the dial checks in again; if the dial is gone for good, remove it in Helm or Deckhand Console."
+    },
+    "dial_not_on_server": {
+      "title": "{dial} isn't on your Deckhand server any more",
+      "description": "{dial} is still listed in Home Assistant, but your Deckhand server no longer has it: it was deregistered, or moved to another server, and will not check in here again. Select **Submit** to remove it from Home Assistant (automations that target it will need a new target). If the dial comes back to this server, this notice clears by itself.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Remove {dial} from Home Assistant",
+            "description": "{dial} was deregistered or moved to another Deckhand server, so it will not check in here again. Submit to remove the device and its entities from Home Assistant. Automations, scripts and dashboards that use it will need a new target."
+          }
+        },
+        "error": {
+          "dial_reporting": "{dial} checked in within the last few minutes, so it is still on this server and was not removed."
+        }
+      }
+    },
     "blueprints_not_imported": {
       "title": "Import the Deckhand blueprints",
       "fix_flow": {

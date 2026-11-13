@@ -114,7 +114,7 @@ class ManifestTests(unittest.TestCase):
     the value.
     """
 
-    EXPECTED_VERSION = "1.26.0"  # 1.26.0 = automation surface (HACS Studio phase 2): device triggers/actions, Button/Menu/NFC/Invitation events, Repairs, setup summary, mount_climate_face
+    EXPECTED_VERSION = "1.27.0"  # 1.27.0 = ghost dials: "not on your server" Repairs instead of "offline", device Delete; 1.26.0 = automation surface (HACS Studio phase 2): device triggers/actions, Button/Menu/NFC/Invitation events, Repairs, setup summary, mount_climate_face
 
     def test_manifest_version_matches_expected(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
