@@ -1,5 +1,5 @@
-"""What the Repairs issues know: firmware gates, the offline window, the
-shipped blueprints. Pure (no Home Assistant imports); ``_issues.py`` turns
+"""What the Repairs issues know: firmware gates, the offline window,
+whether a dial is still on the server, the shipped blueprints. Pure (no Home Assistant imports); ``_issues.py`` turns
 these into issue-registry entries.
 """
 from __future__ import annotations
@@ -87,6 +87,69 @@ def seconds_silent(last_seen: Any, watching_since: datetime, now: datetime) -> f
         if seen is not None and seen > since:
             since = seen
     return (now - since).total_seconds()
+
+
+# ── Is the dial still on the server? ──────────────────────────────────
+# Home Assistant's device registry keeps every dial this entry ever saw,
+# including ones deregistered in Console/Helm while HA was not listening, or
+# moved to another server. Those never report again, so "offline" is the
+# wrong notice for them. A dial counts as on the server when, this session,
+# a non-empty retained cmd/config arrived for it (Helm and Console keep one
+# per dial and empty it on deregister) or it published a status (the dial
+# retains its own; both servers empty it on deregister).
+#
+# Retained messages land right after subscribe; until SERVER_GRACE_S after
+# startup a dial not heard of yet is undecided, not gone.
+SERVER_GRACE_S = 10 * 60
+# store["_server"][dial_id] values.
+ON_SERVER = "present"
+OFF_SERVER = "gone"  # its retained cmd/config was emptied this session
+# server_presence() results.
+PRESENT, PENDING, GONE = "present", "pending", "gone"
+
+# A dial heard live this recently cannot be deleted from Home Assistant: it
+# would only re-register on its next heartbeat.
+REMOVE_REFUSE_S = 5 * 60
+
+
+def server_presence(mark: Any, watching_since: datetime, now: datetime) -> str:
+    """PRESENT / PENDING / GONE for a dial, from what this session saw."""
+    if mark == OFF_SERVER:
+        return GONE
+    if mark == ON_SERVER:
+        return PRESENT
+    if (now - watching_since).total_seconds() < SERVER_GRACE_S:
+        return PENDING
+    return GONE
+
+
+def _parse(raw: Any) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def offline_notice(last_live: Any, watching_since: datetime, now: datetime) -> tuple[float, str]:
+    """(seconds silent, translation key) for a dial on the server.
+
+    ``dial_offline`` when Home Assistant saw a live heartbeat this session
+    and counts from it; ``dial_silent_since_start`` when it never did (a
+    retained status replayed at subscribe is not a report), so the hours
+    are only the time since Home Assistant started."""
+    seen = _parse(last_live)
+    if seen is not None and seen > watching_since:
+        return (now - seen).total_seconds(), "dial_offline"
+    return (now - watching_since).total_seconds(), "dial_silent_since_start"
+
+
+def can_remove_dial(last_live: Any, now: datetime) -> bool:
+    """A dial device may be deleted unless it reported live in the last
+    REMOVE_REFUSE_S."""
+    seen = _parse(last_live)
+    return seen is None or (now - seen).total_seconds() >= REMOVE_REFUSE_S
 
 
 # ── Blueprints ────────────────────────────────────────────────────────

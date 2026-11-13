@@ -6,9 +6,16 @@ blueprints not imported.
   command is still sent; the issue says what to update and why. It clears
   on the first heartbeat whose firmware honours everything it listed (or,
   after a restart forgot the list, every gate).
-* **Dial offline** — no heartbeat for 24 h, counted from the last one this
-  Home Assistant saw, or from startup for a dial that has not reported
-  since. Cleared by the next heartbeat or by deregistering the dial.
+* **Dial offline** — a dial still on the server (``_repairs.server_presence``)
+  with no live heartbeat for 24 h, counted from the last one this Home
+  Assistant saw, or from startup for a dial that has not reported since
+  (then the notice says so). Cleared by the next live heartbeat or by
+  deregistering the dial.
+* **Dial not on the server** — a dial in the device registry that the server
+  no longer has: no retained cmd/config and no status after the startup
+  grace, or its retained cmd/config emptied (deregistered) this session.
+  Never also called offline. Fixable: the flow (repairs.py) removes the
+  device. Cleared when the server publishes the dial's config or it reports.
 * **Blueprints not imported** — none of the shipped blueprints is under
   ``config/blueprints/automation/``. The integration package does not carry
   them (HACS installs ``custom_components/deckhand`` only), so the fix flow
@@ -41,7 +48,14 @@ def offline_issue_id(dial_id: str) -> str:
     return f"dial_offline_{dial_id}"
 
 
-def _dial_name(store: dict[str, Any], dial_id: str) -> str:
+NOT_ON_SERVER_PREFIX = "dial_not_on_server_"
+
+
+def not_on_server_issue_id(dial_id: str) -> str:
+    return f"{NOT_ON_SERVER_PREFIX}{dial_id}"
+
+
+def dial_name(store: dict[str, Any], dial_id: str) -> str:
     label = (store.get("labels") or {}).get(dial_id)
     return f"{label} ({dial_id})" if label else dial_id
 
@@ -87,7 +101,7 @@ def note_firmware_gaps(
             severity=ir.IssueSeverity.WARNING,
             translation_key="firmware_too_old",
             translation_placeholders={
-                "dial": _dial_name(store, dial_id),
+                "dial": dial_name(store, dial_id),
                 "version": str(heartbeat.get("fw_ver")),
                 "features": _repairs.feature_labels(gaps),
                 "required": _repairs.required_version(gaps),
@@ -98,10 +112,19 @@ def note_firmware_gaps(
 
 
 @callback
-def on_heartbeat(hass: HomeAssistant, store: dict[str, Any], dial_id: str, heartbeat: dict[str, Any]) -> None:
-    """A dial reported: clear its offline issue, and its firmware issue once
-    the firmware honours what the issue asked for."""
-    if _has_issue(hass, offline_issue_id(dial_id)):
+def on_heartbeat(
+    hass: HomeAssistant,
+    store: dict[str, Any],
+    dial_id: str,
+    heartbeat: dict[str, Any],
+    live: bool = True,
+) -> None:
+    """A dial reported: it is on the server. A live report clears its offline
+    issue (a retained status replayed at subscribe says nothing about now);
+    either clears its firmware issue once the firmware honours what the
+    issue asked for."""
+    _mark_on_server(hass, store, dial_id)
+    if live and _has_issue(hass, offline_issue_id(dial_id)):
         ir.async_delete_issue(hass, DOMAIN, offline_issue_id(dial_id))
     issue_id = firmware_issue_id(dial_id)
     if not _has_issue(hass, issue_id):
@@ -112,11 +135,83 @@ def on_heartbeat(hass: HomeAssistant, store: dict[str, Any], dial_id: str, heart
         (store.get("_fw_gaps") or {}).pop(dial_id, None)
 
 
+def _mark_on_server(hass: HomeAssistant, store: dict[str, Any], dial_id: str) -> None:
+    store.setdefault("_server", {})[dial_id] = _repairs.ON_SERVER
+    if _has_issue(hass, not_on_server_issue_id(dial_id)):
+        ir.async_delete_issue(hass, DOMAIN, not_on_server_issue_id(dial_id))
+
+
+def _raise_not_on_server(hass: HomeAssistant, store: dict[str, Any], dial_id: str, entry_id: str | None) -> None:
+    if _has_issue(hass, offline_issue_id(dial_id)):
+        ir.async_delete_issue(hass, DOMAIN, offline_issue_id(dial_id))
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        not_on_server_issue_id(dial_id),
+        is_fixable=True,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="dial_not_on_server",
+        translation_placeholders={"dial": dial_name(store, dial_id)},
+        data={"dial_id": dial_id, "entry_id": entry_id},
+    )
+
+
 @callback
-def forget_dial(hass: HomeAssistant, dial_id: str) -> None:
-    """A deregistered dial's issues go with it."""
-    for issue_id in (offline_issue_id(dial_id), firmware_issue_id(dial_id)):
+def on_config(
+    hass: HomeAssistant,
+    store: dict[str, Any],
+    dial_id: str,
+    cleared: bool,
+    known: bool,
+    entry_id: str | None,
+) -> None:
+    """A retained cmd/config arrived for a dial. Non-empty: the server has
+    it. Empty: the server dropped it (deregistered) — it is no longer
+    offline, and a dial Home Assistant knows gets the fixable notice."""
+    if not cleared:
+        _mark_on_server(hass, store, dial_id)
+        return
+    store.setdefault("_server", {})[dial_id] = _repairs.OFF_SERVER
+    if known:
+        _raise_not_on_server(hass, store, dial_id, entry_id)
+    elif _has_issue(hass, offline_issue_id(dial_id)):
+        ir.async_delete_issue(hass, DOMAIN, offline_issue_id(dial_id))
+
+
+@callback
+def forget_dial(hass: HomeAssistant, dial_id: str, store: dict[str, Any] | None = None) -> None:
+    """A deregistered or deleted dial's issues go with it, and (given its
+    entry's store) everything the entry remembered about it."""
+    for issue_id in (
+        offline_issue_id(dial_id), firmware_issue_id(dial_id), not_on_server_issue_id(dial_id)
+    ):
         ir.async_delete_issue(hass, DOMAIN, issue_id)
+    if store is None:
+        return
+    for key in ("dials", "labels", "_fw_gaps", "_live_seen", "_server"):
+        bucket = store.get(key)
+        if isinstance(bucket, dict):
+            bucket.pop(dial_id, None)
+
+
+def last_live(store: dict[str, Any], dial_id: str) -> Any:
+    """ISO time of the dial's last live (not retained) heartbeat, or None."""
+    return (store.get("_live_seen") or {}).get(dial_id)
+
+
+@callback
+def remove_dial_device(hass: HomeAssistant, store: dict[str, Any] | None, dial_id: str) -> bool:
+    """Delete the dial's device from the registry and forget it. Returns
+    False (and does nothing) while the dial is still reporting."""
+    if store is not None and not _repairs.can_remove_dial(last_live(store, dial_id), datetime.now()):
+        return False
+    registry = dr.async_get(hass)
+    device = registry.async_get_device(identifiers={(DOMAIN, dial_id)})
+    if device is not None:
+        registry.async_remove_device(device.id)
+    forget_dial(hass, dial_id, store)
+    return True
 
 
 def entry_dial_ids(hass: HomeAssistant, entry_id: str) -> list[str]:
@@ -138,13 +233,22 @@ def check_offline(
     dial_ids: Iterable[str],
     watching_since: datetime,
     now: datetime | None = None,
+    entry_id: str | None = None,
 ) -> list[str]:
-    """Raise the offline issue for every dial quiet for OFFLINE_AFTER_S."""
+    """Raise the offline issue for every dial on the server and quiet for
+    OFFLINE_AFTER_S, and the not-on-server issue for every dial the server
+    no longer has. Returns the dial ids called offline."""
     now = now or datetime.now()
     raised: list[str] = []
+    server = store.get("_server") or {}
     for dial_id in dict.fromkeys([*dial_ids, *(store.get("dials") or {})]):
-        last = ((store.get("dials") or {}).get(dial_id) or {}).get("_last_seen")
-        silent = _repairs.seconds_silent(last, watching_since, now)
+        presence = _repairs.server_presence(server.get(dial_id), watching_since, now)
+        if presence == _repairs.PENDING:
+            continue
+        if presence == _repairs.GONE:
+            _raise_not_on_server(hass, store, dial_id, entry_id)
+            continue
+        silent, key = _repairs.offline_notice(last_live(store, dial_id), watching_since, now)
         if silent < _repairs.OFFLINE_AFTER_S:
             continue
         ir.async_create_issue(
@@ -154,9 +258,9 @@ def check_offline(
             is_fixable=False,
             is_persistent=False,
             severity=ir.IssueSeverity.WARNING,
-            translation_key="dial_offline",
+            translation_key=key,
             translation_placeholders={
-                "dial": _dial_name(store, dial_id),
+                "dial": dial_name(store, dial_id),
                 "hours": str(int(silent // 3600)),
             },
         )

@@ -308,6 +308,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         # features each dial was asked for and could not honour.
         "_watching_since": datetime.now(),
         "_fw_gaps": {},
+        # dial_id -> ISO time of its last LIVE heartbeat (a retained status
+        # replayed at subscribe is not one). What "offline" counts from.
+        "_live_seen": {},
+        # dial_id -> _repairs.ON_SERVER / OFF_SERVER: whether the server
+        # still has the dial (retained cmd/config or a status this session,
+        # or its retained cmd/config emptied). Unset = not heard of yet.
+        "_server": {},
     }
 
     # The dial GETs album art from us (baseline JPEG, dial-sized) rather
@@ -351,10 +358,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             return
 
         is_new = dial_id not in store["dials"]
+        now_iso = datetime.now().isoformat()
         enriched = {
             **payload,
-            "_last_seen": datetime.now().isoformat(),
+            "_last_seen": now_iso,
         }
+        # A retained status (the broker replaying the dial's last one at
+        # subscribe or on reconnect) proves the server still has the dial,
+        # but not that it is up now.
+        live = not bool(getattr(msg, "retain", False))
+        if live:
+            store.setdefault("_live_seen", {})[dial_id] = now_iso
         # Layer in any friendly label captured from retained cmd/config.
         label = store.get("labels", {}).get(dial_id)
         if label:
@@ -374,7 +388,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             )
 
         # A dial that reports is not offline, and may have been updated.
-        _repairs_safely(_issues.on_heartbeat, hass, store, dial_id, enriched)
+        _repairs_safely(_issues.on_heartbeat, hass, store, dial_id, enriched, live)
 
         # Fire an event so existing entities can update. Include the
         # _last_seen timestamp so entities can compute availability.
@@ -396,24 +410,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
 
     @callback
     def _handle_config(msg: mqtt.ReceiveMessage) -> None:
-        """Pick the dial's friendly label out of a cmd/config payload."""
-        try:
-            payload = json.loads(msg.payload)
-        except (json.JSONDecodeError, ValueError):
-            return
-        label = payload.get("label")
-        if not isinstance(label, str) or not label.strip():
-            return
-        label = label.strip()
-
+        """Note that the server has (or just dropped) the dial, and pick the
+        dial's friendly label out of a cmd/config payload."""
         parts = msg.topic.split("/")
         if len(parts) < 5:
             return
         dial_id = parts[3]
-
         store = hass.data[DOMAIN].get(entry.entry_id)
         if not store:
             return
+
+        raw = msg.payload
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", "replace")
+        if not str(raw or "").strip():
+            # Emptied retained config: the server deregistered the dial
+            # (Console clear_retained_for_device, Helm
+            # clear_all_retained_for_dial). Not offline; removable.
+            _repairs_safely(lambda: _issues.on_config(
+                hass, store, dial_id, True,
+                dial_id in store["dials"]
+                or dr.async_get(hass).async_get_device(identifiers={(DOMAIN, dial_id)}) is not None,
+                entry.entry_id,
+            ))
+            return
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        _repairs_safely(_issues.on_config, hass, store, dial_id, False, True, entry.entry_id)
+
+        label = payload.get("label")
+        if not isinstance(label, str) or not label.strip():
+            return
+        label = label.strip()
 
         prev_label = store["labels"].get(dial_id)
         store["labels"][dial_id] = label
@@ -678,7 +710,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
             return
         _LOGGER.info("Lifecycle deregister for %s — removing from device registry", dial_id)
         registry.async_remove_device(device.id)
-        _repairs_safely(_issues.forget_dial, hass, dial_id)
+        _repairs_safely(
+            _issues.forget_dial, hass, dial_id, hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        )
 
     entry.async_on_unload(
         hass.bus.async_listen(f"{DOMAIN}_dial_event", _handle_lifecycle)
@@ -801,7 +835,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         _repairs_safely(
             lambda: _issues.check_offline(
                 hass, store, _issues.entry_dial_ids(hass, entry.entry_id),
-                store["_watching_since"],
+                store["_watching_since"], None, entry.entry_id,
             )
         )
 
@@ -841,6 +875,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeckhandConfigEntry) -> 
         )
     )
 
+    return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: DeckhandConfigEntry, device_entry: Any
+) -> bool:
+    """Let the device page's Delete remove a Deckhand device.
+
+    A dial: allowed unless it reported live in the last few minutes (it
+    would just re-register on its next heartbeat); its store entries and
+    Repairs issues go with it. A Room: allowed only once the server's
+    ``groups/list`` no longer has it (a listed room is re-created by the
+    next message; remove it in Helm or Console instead)."""
+    store = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    for domain, ident in getattr(device_entry, "identifiers", ()):
+        if domain != DOMAIN:
+            continue
+        ident = str(ident)
+        if ident.startswith("group:"):
+            gid = ident.removeprefix("group:")
+            return not (store and gid in {str(k) for k in (store.get("groups") or {})})
+        if store is not None and not _repairs.can_remove_dial(
+            _issues.last_live(store, ident), datetime.now()
+        ):
+            return False
+        _repairs_safely(_issues.forget_dial, hass, ident, store)
+        return True
     return True
 
 

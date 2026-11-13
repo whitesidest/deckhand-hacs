@@ -40,6 +40,15 @@ Every service also takes a Room device, and `device_id: all` (YAML) reaches ever
   hide-when-calm 0.4.161). The command is still sent; the notice clears on
   the dial's first check-in on new enough firmware.
 - **A dial has been offline for a day** — clears when it checks in again.
+  Only dials your Deckhand server still has are flagged. If the dial has not
+  checked in since Home Assistant started, the notice says so (Home
+  Assistant cannot tell how long it was quiet before that).
+- **A dial isn't on your Deckhand server any more** — it is still in Home
+  Assistant but was deregistered or moved to another server, so it will
+  never check in here again. The fix removes the device from Home
+  Assistant. You can also delete any Deckhand dial from its device page,
+  unless it checked in within the last five minutes (it would just come
+  back); a Room can be deleted once the server no longer lists it.
 - **Import the Deckhand blueprints** — none of the shipped blueprints is in
   `config/blueprints/automation/`. HACS installs only the integration, not
   the repository's `blueprints/` folder, so the fix lists an import link

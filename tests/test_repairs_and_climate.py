@@ -204,15 +204,21 @@ class FirmwareIssue(unittest.TestCase):
 
 # ---------------------------------------------------------------- offline issue
 class OfflineIssue(unittest.TestCase):
+    """Only dials the server still has can be offline (1.27.0)."""
+
     def setUp(self):
         self.ir = _patch_ir(self, ISS)
         self.start = datetime(2026, 10, 28, 8, 0)
         self.store = _store(**{"DECK-AAAA": {"_last_seen": (self.start + timedelta(hours=2)).isoformat()}})
+        # DECK-AAAA heard live at +2 h; DECK-CCCC's retained cmd/config
+        # arrived (on the server) but it never reported.
+        self.store["_live_seen"] = {"DECK-AAAA": (self.start + timedelta(hours=2)).isoformat()}
+        self.store["_server"] = {"DECK-AAAA": REP.ON_SERVER, "DECK-CCCC": REP.ON_SERVER}
         self.hass = _hass(self.store)
 
     def check(self, hours, registry_dials=("DECK-AAAA", "DECK-CCCC")):
         return ISS.check_offline(self.hass, self.store, registry_dials, self.start,
-                                 now=self.start + timedelta(hours=hours))
+                                 now=self.start + timedelta(hours=hours), entry_id="entry-1")
 
     def test_a_day_of_silence(self):
         self.assertEqual(self.check(23), [])
@@ -220,7 +226,12 @@ class OfflineIssue(unittest.TestCase):
         self.assertEqual(self.check(25), ["DECK-CCCC"])
         self.assertEqual(self.check(27), ["DECK-AAAA", "DECK-CCCC"])
         issue = self.ir.issues["dial_offline_DECK-AAAA"]
+        self.assertEqual(issue["translation_key"], "dial_offline")
         self.assertEqual(issue["translation_placeholders"], {"dial": "Kitchen (DECK-AAAA)", "hours": "25"})
+        since_start = self.ir.issues["dial_offline_DECK-CCCC"]
+        self.assertEqual(since_start["translation_key"], "dial_silent_since_start")
+        self.assertEqual(since_start["translation_placeholders"], {"dial": "DECK-CCCC", "hours": "27"})
+        self.assertFalse([i for i in self.ir.issues if i.startswith("dial_not_on_server_")])
 
     def test_a_heartbeat_or_a_deregister_clears_it(self):
         self.check(30)
@@ -228,6 +239,55 @@ class OfflineIssue(unittest.TestCase):
         self.assertNotIn("dial_offline_DECK-AAAA", self.ir.issues)
         ISS.forget_dial(self.hass, "DECK-CCCC")
         self.assertEqual(self.ir.issues, {})
+
+    def test_a_retained_status_replay_does_not_clear_it(self):
+        self.check(30)
+        ISS.on_heartbeat(self.hass, self.store, "DECK-AAAA", {}, False)
+        self.assertIn("dial_offline_DECK-AAAA", self.ir.issues)
+
+    def test_a_ghost_is_not_on_the_server_never_offline(self):
+        # DECK-GHST: in the registry only. No config, no status.
+        dials = ("DECK-AAAA", "DECK-CCCC", "DECK-GHST")
+        self.check(0.1, dials)  # within the startup grace: undecided
+        self.assertEqual(self.ir.issues, {})
+        self.assertEqual(self.check(30, dials), ["DECK-AAAA", "DECK-CCCC"])
+        ghost = self.ir.issues["dial_not_on_server_DECK-GHST"]
+        self.assertTrue(ghost["is_fixable"])
+        self.assertEqual(ghost["translation_key"], "dial_not_on_server")
+        self.assertEqual(ghost["data"], {"dial_id": "DECK-GHST", "entry_id": "entry-1"})
+        self.assertNotIn("dial_offline_DECK-GHST", self.ir.issues)
+        # The server publishes its config after all: the notice goes.
+        ISS.on_config(self.hass, self.store, "DECK-GHST", False, True, "entry-1")
+        self.assertNotIn("dial_not_on_server_DECK-GHST", self.ir.issues)
+        self.assertEqual(self.store["_server"]["DECK-GHST"], REP.ON_SERVER)
+        # ...or it reports: same.
+        ISS.check_offline(self.hass, self.store, ["DECK-OTHR"], self.start,
+                          now=self.start + timedelta(hours=1), entry_id="entry-1")
+        self.assertIn("dial_not_on_server_DECK-OTHR", self.ir.issues)
+        ISS.on_heartbeat(self.hass, self.store, "DECK-OTHR", {})
+        self.assertNotIn("dial_not_on_server_DECK-OTHR", self.ir.issues)
+
+    def test_an_emptied_config_converts_offline_to_not_on_server(self):
+        self.check(30)
+        self.assertIn("dial_offline_DECK-AAAA", self.ir.issues)
+        ISS.on_config(self.hass, self.store, "DECK-AAAA", True, True, "entry-1")
+        self.assertNotIn("dial_offline_DECK-AAAA", self.ir.issues)
+        self.assertIn("dial_not_on_server_DECK-AAAA", self.ir.issues)
+        # And it stays that way on the next check, despite the old heartbeat.
+        self.check(31)
+        self.assertNotIn("dial_offline_DECK-AAAA", self.ir.issues)
+        # A dial HA never knew: nothing to remove, no notice.
+        ISS.on_config(self.hass, self.store, "DECK-NEWX", True, False, "entry-1")
+        self.assertNotIn("dial_not_on_server_DECK-NEWX", self.ir.issues)
+
+    def test_forget_with_the_store_drops_everything(self):
+        self.store["labels"]["DECK-AAAA"] = "Kitchen"
+        self.store["_fw_gaps"]["DECK-AAAA"] = ["dnd"]
+        self.check(30)
+        ISS.forget_dial(self.hass, "DECK-AAAA", self.store)
+        for key in ("dials", "labels", "_fw_gaps", "_live_seen", "_server"):
+            self.assertNotIn("DECK-AAAA", self.store[key], key)
+        self.assertFalse([i for i in self.ir.issues if i.endswith("DECK-AAAA")])
 
     def test_registry_dials_exclude_rooms(self):
         devices = [types.SimpleNamespace(identifiers={(DOMAIN, "DECK-AAAA")}),
@@ -237,6 +297,86 @@ class OfflineIssue(unittest.TestCase):
                                    async_entries_for_config_entry=lambda reg, entry_id: devices)
         with mock.patch.object(ISS, "dr", dr):
             self.assertEqual(ISS.entry_dial_ids(self.hass, "entry-1"), ["DECK-AAAA"])
+
+
+class ServerPresencePure(unittest.TestCase):
+    def test_presence(self):
+        start = datetime(2026, 11, 1, 8, 0)
+        early, late = start + timedelta(minutes=9), start + timedelta(minutes=11)
+        self.assertEqual(REP.server_presence(None, start, early), REP.PENDING)
+        self.assertEqual(REP.server_presence(None, start, late), REP.GONE)
+        self.assertEqual(REP.server_presence(REP.ON_SERVER, start, late), REP.PRESENT)
+        self.assertEqual(REP.server_presence(REP.ON_SERVER, start, early), REP.PRESENT)
+        self.assertEqual(REP.server_presence(REP.OFF_SERVER, start, early), REP.GONE)
+
+    def test_offline_wording(self):
+        start = datetime(2026, 11, 1, 8, 0)
+        now = start + timedelta(hours=56)
+        self.assertEqual(REP.offline_notice(None, start, now), (56 * 3600, "dial_silent_since_start"))
+        self.assertEqual(REP.offline_notice("junk", start, now), (56 * 3600, "dial_silent_since_start"))
+        seen = (start + timedelta(hours=6)).isoformat()
+        self.assertEqual(REP.offline_notice(seen, start, now), (50 * 3600, "dial_offline"))
+
+    def test_can_remove(self):
+        now = datetime(2026, 11, 1, 8, 0)
+        self.assertTrue(REP.can_remove_dial(None, now))
+        self.assertTrue(REP.can_remove_dial((now - timedelta(minutes=6)).isoformat(), now))
+        self.assertFalse(REP.can_remove_dial((now - timedelta(minutes=4)).isoformat(), now))
+
+
+class _DialRegistry:
+    def __init__(self, *dial_ids):
+        self.devices = {f"dev-{d}": types.SimpleNamespace(id=f"dev-{d}", identifiers={(DOMAIN, d)})
+                        for d in dial_ids}
+
+    def async_get_device(self, identifiers):
+        for d in self.devices.values():
+            if d.identifiers & set(identifiers):
+                return d
+        return None
+
+    def async_remove_device(self, device_id):
+        self.devices.pop(device_id, None)
+
+
+class RemoveDialFixFlow(unittest.TestCase):
+    def setUp(self):
+        self.ir = _patch_ir(self, ISS)
+        self.store = _store()
+        self.store.update({"_live_seen": {}, "_server": {}})
+        self.hass = _hass(self.store)
+        self.registry = _DialRegistry("DECK-GHST", "DECK-LIVE")
+        p = mock.patch.object(ISS, "dr", types.SimpleNamespace(async_get=lambda hass: self.registry))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _flow(self, issue_id, data):
+        flow = asyncio.run(FLOW.async_create_fix_flow(self.hass, issue_id, data))
+        flow.hass = self.hass
+        flow.async_show_form = lambda **kw: {"type": "form", **kw}
+        flow.async_create_entry = lambda **kw: {"type": "create_entry", **kw}
+        return flow
+
+    def test_submit_removes_the_device_and_its_issues(self):
+        ISS.check_offline(self.hass, self.store, ["DECK-GHST"], datetime.now() - timedelta(hours=1),
+                          entry_id="entry-1")
+        issue = self.ir.issues["dial_not_on_server_DECK-GHST"]
+        flow = self._flow("dial_not_on_server_DECK-GHST", issue["data"])
+        first = asyncio.run(flow.async_step_init())
+        self.assertEqual((first["type"], first["step_id"], first["errors"]), ("form", "confirm", {}))
+        self.assertEqual(first["description_placeholders"], {"dial": "DECK-GHST"})
+        done = asyncio.run(flow.async_step_confirm({}))
+        self.assertEqual(done["type"], "create_entry")
+        self.assertNotIn("dev-DECK-GHST", self.registry.devices)
+        self.assertIn("dev-DECK-LIVE", self.registry.devices)
+        self.assertEqual(self.ir.issues, {})
+
+    def test_refused_while_the_dial_reports(self):
+        self.store["_live_seen"]["DECK-LIVE"] = datetime.now().isoformat()
+        flow = self._flow("dial_not_on_server_DECK-LIVE", {"dial_id": "DECK-LIVE", "entry_id": "entry-1"})
+        again = asyncio.run(flow.async_step_confirm({}))
+        self.assertEqual(again["errors"], {"base": "dial_reporting"})
+        self.assertIn("dev-DECK-LIVE", self.registry.devices)
 
 
 # ---------------------------------------------------------------- blueprints
